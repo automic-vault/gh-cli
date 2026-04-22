@@ -1,0 +1,30 @@
+name:
+  isotope:gh
+
+replaces:
+  brew:gh
+
+build: |
+  make
+  codesign --force --options runtime --timestamp \
+    --sign "$CODESIGN_IDENTITY" \
+    bin/gh
+  tar czf out.tgz bin
+
+migrate: |
+  /opt/isotopes/gh/bin/gh auth av-migrate "$@"
+
+justification:
+  title:
+    Trivially Accessible Secrets
+  detail: |
+    `gh` stores its secrets in the Keychain but they can be trivially
+    obtained:
+
+    1. `gh auth token`
+    2. `security find-generic-password -s 'gh:github.com' -w`
+
+    Our isotope prevents anything but `gh` itself from accessing its secrets
+    by gating `gh auth token` behind a Automic Vault human-approval prompt and
+    gating attempts to use the macOS `security` tool behind a keychain
+    approval prompt.
