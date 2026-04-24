@@ -7,6 +7,55 @@ package keyring
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
 #include <stdlib.h>
+
+static OSStatus create_access_for_path(const char *path, CFStringRef descriptor, SecAccessRef *accessRef) {
+	SecTrustedApplicationRef app = NULL;
+	OSStatus status = SecTrustedApplicationCreateFromPath(path, &app);
+	if (status != errSecSuccess) {
+		return status;
+	}
+
+	const void *trustedApps[] = { app };
+	CFArrayRef trustedList = CFArrayCreate(kCFAllocatorDefault, trustedApps, 1, &kCFTypeArrayCallBacks);
+	status = SecAccessCreate(descriptor, trustedList, accessRef);
+	CFRelease(trustedList);
+	CFRelease(app);
+	return status;
+}
+
+static OSStatus create_generic_password_item(
+	const char *service, UInt32 serviceLen,
+	const char *account, UInt32 accountLen,
+	const char *label, UInt32 labelLen,
+	const void *secret, UInt32 secretLen,
+	SecAccessRef accessRef,
+	SecKeychainItemRef *itemRef
+) {
+	SecKeychainAttribute attrs[3];
+	attrs[0].tag = kSecServiceItemAttr;
+	attrs[0].length = serviceLen;
+	attrs[0].data = (void *)service;
+	attrs[1].tag = kSecAccountItemAttr;
+	attrs[1].length = accountLen;
+	attrs[1].data = (void *)account;
+	attrs[2].tag = kSecLabelItemAttr;
+	attrs[2].length = labelLen;
+	attrs[2].data = (void *)label;
+
+	SecKeychainAttributeList attrList;
+	attrList.count = 3;
+	attrList.attr = attrs;
+
+	return SecKeychainItemCreateFromContent(
+		kSecGenericPasswordItemClass,
+		&attrList,
+		secretLen,
+		secret,
+		NULL,
+		accessRef,
+		itemRef
+	);
+}
 */
 import "C"
 
@@ -14,6 +63,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"unsafe"
 )
@@ -25,26 +76,20 @@ const (
 )
 
 func set(service, user, secret string) error {
-	query := itemQuery(service, user)
-	defer C.CFRelease(C.CFTypeRef(query))
+	access, err := trustedApplicationAccess(service)
+	if err != nil {
+		return err
+	}
+	defer C.CFRelease(C.CFTypeRef(access))
 
-	secretData := data(secret)
-	defer C.CFRelease(C.CFTypeRef(secretData))
-
-	C.CFDictionarySetValue(
-		query,
-		unsafe.Pointer(C.kSecValueData),
-		unsafe.Pointer(secretData),
-	)
-
-	status := C.SecItemAdd(C.CFDictionaryRef(query), nil)
+	status := createGenericPasswordItem(service, user, secret, access)
 	if status != C.errSecDuplicateItem {
 		return keychainError(status)
 	}
 	if err := deleteSecret(service, user); err != nil {
 		return err
 	}
-	return keychainError(C.SecItemAdd(C.CFDictionaryRef(query), nil))
+	return keychainError(createGenericPasswordItem(service, user, secret, access))
 }
 
 func get(service, user string) (string, error) {
@@ -110,6 +155,69 @@ func itemQuery(service, user string) C.CFMutableDictionaryRef {
 	)
 
 	return query
+}
+
+func trustedApplicationAccess(descriptor string) (C.SecAccessRef, error) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		return 0, fmt.Errorf("resolve executable path: %w", err)
+	}
+	if resolvedPath, err := filepath.EvalSymlinks(executablePath); err == nil {
+		executablePath = resolvedPath
+	}
+
+	cPath := C.CString(executablePath)
+	defer C.free(unsafe.Pointer(cPath))
+
+	descriptorString := cfString(descriptor)
+	defer C.CFRelease(C.CFTypeRef(descriptorString))
+
+	var access C.SecAccessRef
+	status := C.create_access_for_path(cPath, descriptorString, &access)
+	if err := keychainError(status); err != nil {
+		return 0, err
+	}
+
+	return access, nil
+}
+
+func createGenericPasswordItem(service, user, secret string, access C.SecAccessRef) C.OSStatus {
+	serviceBytes := []byte(service)
+	userBytes := []byte(user)
+	labelBytes := []byte(service)
+	secretBytes := []byte(secret)
+
+	var servicePtr, userPtr, labelPtr, secretPtr unsafe.Pointer
+	if len(serviceBytes) > 0 {
+		servicePtr = C.CBytes(serviceBytes)
+		defer C.free(servicePtr)
+	}
+	if len(userBytes) > 0 {
+		userPtr = C.CBytes(userBytes)
+		defer C.free(userPtr)
+	}
+	if len(labelBytes) > 0 {
+		labelPtr = C.CBytes(labelBytes)
+		defer C.free(labelPtr)
+	}
+	if len(secretBytes) > 0 {
+		secretPtr = C.CBytes(secretBytes)
+		defer C.free(secretPtr)
+	}
+
+	var item C.SecKeychainItemRef
+	status := C.create_generic_password_item(
+		(*C.char)(servicePtr), C.UInt32(len(serviceBytes)),
+		(*C.char)(userPtr), C.UInt32(len(userBytes)),
+		(*C.char)(labelPtr), C.UInt32(len(labelBytes)),
+		secretPtr, C.UInt32(len(secretBytes)),
+		access,
+		&item,
+	)
+	if item != 0 {
+		C.CFRelease(C.CFTypeRef(item))
+	}
+	return status
 }
 
 func cfString(s string) C.CFStringRef {
