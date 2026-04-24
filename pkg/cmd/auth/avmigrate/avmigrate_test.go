@@ -3,6 +3,8 @@ package avmigrate
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cli/cli/v2/internal/config"
@@ -241,4 +243,36 @@ func TestMigrateRunRestoresLegacyItemsWhenSecureLoginFails(t *testing.T) {
 
 	require.EqualError(t, err, "boom")
 	require.True(t, restored)
+}
+
+func TestLegacySecurityArgsUseLoginKeychainWhenAvailable(t *testing.T) {
+	home := t.TempDir()
+	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(keychain), 0755))
+	require.NoError(t, os.WriteFile(keychain, []byte{}, 0644))
+	t.Setenv("HOME", home)
+
+	args := legacySecurityArgs("find-generic-password", "-s", "gh:github.com", "-w")
+
+	require.Equal(t, []string{
+		"find-generic-password",
+		"-s",
+		"gh:github.com",
+		"-w",
+		keychain,
+	}, args)
+}
+
+func TestLegacySecurityArgsFallBackToAmbientSearchList(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	args := legacySecurityArgs("find-generic-password", "-s", "gh:github.com", "-w")
+
+	require.Equal(t, []string{
+		"find-generic-password",
+		"-s",
+		"gh:github.com",
+		"-w",
+	}, args)
 }
