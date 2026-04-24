@@ -3,7 +3,9 @@ package avmigrate
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -163,7 +165,7 @@ func restoreLegacyTokens(hostname, username, token string) error {
 }
 
 func securityFindGenericPassword(service, account string) (string, error) {
-	args := []string{"find-generic-password", "-s", service, "-a", account, "-w"}
+	args := legacySecurityArgs("find-generic-password", "-s", service, "-a", account, "-w")
 	out, err := exec.Command("/usr/bin/security", args...).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -176,7 +178,7 @@ func securityFindGenericPassword(service, account string) (string, error) {
 }
 
 func securityDeleteGenericPassword(service, account string) error {
-	args := []string{"delete-generic-password", "-s", service, "-a", account}
+	args := legacySecurityArgs("delete-generic-password", "-s", service, "-a", account)
 	out, err := exec.Command("/usr/bin/security", args...).CombinedOutput()
 	if err == nil {
 		return nil
@@ -193,7 +195,7 @@ func securityDeleteGenericPassword(service, account string) error {
 }
 
 func securityAddGenericPassword(service, account, token string) error {
-	args := []string{"add-generic-password", "-U", "-s", service, "-a", account, "-w", token}
+	args := legacySecurityArgs("add-generic-password", "-U", "-s", service, "-a", account, "-w", token)
 	out, err := exec.Command("/usr/bin/security", args...).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -206,7 +208,8 @@ func securityAddGenericPassword(service, account, token string) error {
 }
 
 func securityFindGenericPasswordWithoutAccount(service string) (string, error) {
-	out, err := exec.Command("/usr/bin/security", "find-generic-password", "-s", service, "-w").CombinedOutput()
+	args := legacySecurityArgs("find-generic-password", "-s", service, "-w")
+	out, err := exec.Command("/usr/bin/security", args...).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
@@ -215,4 +218,25 @@ func securityFindGenericPasswordWithoutAccount(service string) (string, error) {
 		return "", fmt.Errorf("%w: %s", err, msg)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func legacySecurityArgs(args ...string) []string {
+	if keychain := legacyLoginKeychainPath(); keychain != "" {
+		return append(args, keychain)
+	}
+	return args
+}
+
+func legacyLoginKeychainPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	for _, name := range []string{"login.keychain-db", "login.keychain"} {
+		path := filepath.Join(home, "Library", "Keychains", name)
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
 }
