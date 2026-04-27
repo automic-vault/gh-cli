@@ -91,6 +91,9 @@ mod macos_keychain {
 
     const ERR_SEC_SUCCESS: i32 = 0;
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+    const CF_NUMBER_SINT32_TYPE: i32 = 3;
+    const CSSM_ACL_AUTHORIZATION_ANY: i32 = 1;
+    const CSSM_ACL_AUTHORIZATION_DECRYPT: i32 = 24;
     const SEC_GENERIC_PASSWORD_ITEM_CLASS: u32 = u32::from_be_bytes(*b"genp");
     const SEC_SERVICE_ITEM_ATTR: u32 = u32::from_be_bytes(*b"svce");
     const SECURITY_TOOL_PATH: &[u8] = b"/usr/bin/security";
@@ -98,6 +101,7 @@ mod macos_keychain {
     type CFTypeRef = *const c_void;
     type CFArrayRef = *const c_void;
     type CFDataRef = *const c_void;
+    type CFNumberRef = *const c_void;
     type CFStringRef = *const c_void;
     type SecAccessRef = *const c_void;
     type SecACLRef = *const c_void;
@@ -123,7 +127,9 @@ mod macos_keychain {
         fn CFArrayGetValueAtIndex(array: CFArrayRef, index: isize) -> *const c_void;
         fn CFDataGetBytePtr(data: CFDataRef) -> *const u8;
         fn CFDataGetLength(data: CFDataRef) -> isize;
+        fn CFNumberGetValue(number: CFNumberRef, the_type: i32, value_ptr: *mut c_void) -> bool;
         fn CFRelease(value: CFTypeRef);
+        fn SecACLCopyAuthorizations(acl: SecACLRef) -> CFArrayRef;
         fn SecACLCopyContents(
             acl: SecACLRef,
             application_list: *mut CFArrayRef,
@@ -225,6 +231,10 @@ mod macos_keychain {
     }
 
     fn acl_allows_security_tool(acl: SecACLRef) -> Result<bool, String> {
+        if !acl_authorizes_secret_read(acl) {
+            return Ok(false);
+        }
+
         let mut app_list = ptr::null();
         let mut description = ptr::null();
         let mut prompt_selector = 0u16;
@@ -249,6 +259,43 @@ mod macos_keychain {
             }
         }
         Ok(false)
+    }
+
+    fn acl_authorizes_secret_read(acl: SecACLRef) -> bool {
+        let authorizations = unsafe { SecACLCopyAuthorizations(acl) };
+        if authorizations.is_null() {
+            return false;
+        }
+        let _authorizations_ref = ScopedCf(authorizations);
+
+        let authorization_count = unsafe { CFArrayGetCount(authorizations) };
+        for index in 0..authorization_count {
+            let authorization =
+                unsafe { CFArrayGetValueAtIndex(authorizations, index).cast::<c_void>() };
+            if authorization.is_null() {
+                continue;
+            }
+            if authorization_grants_secret_read(authorization) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn authorization_grants_secret_read(authorization: CFNumberRef) -> bool {
+        let mut tag = 0i32;
+        let ok = unsafe {
+            CFNumberGetValue(
+                authorization,
+                CF_NUMBER_SINT32_TYPE,
+                (&mut tag as *mut i32).cast(),
+            )
+        };
+        ok && auth_tag_grants_secret_read(tag)
+    }
+
+    fn auth_tag_grants_secret_read(tag: i32) -> bool {
+        tag == CSSM_ACL_AUTHORIZATION_DECRYPT || tag == CSSM_ACL_AUTHORIZATION_ANY
     }
 
     fn trusted_application_is_security_tool(app: SecTrustedApplicationRef) -> Result<bool, String> {
@@ -290,6 +337,18 @@ mod macos_keychain {
             if !self.0.is_null() {
                 unsafe { CFRelease(self.0.cast()) };
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn read_authorization_tags_cover_decrypt_and_any_only() {
+            assert!(auth_tag_grants_secret_read(CSSM_ACL_AUTHORIZATION_DECRYPT));
+            assert!(auth_tag_grants_secret_read(CSSM_ACL_AUTHORIZATION_ANY));
+            assert!(!auth_tag_grants_secret_read(0));
         }
     }
 }
