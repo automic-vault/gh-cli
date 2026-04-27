@@ -44,9 +44,7 @@ fn contains_gh_auth_material(contents: &str) -> bool {
         let Some((key, value)) = trimmed.split_once(':') else {
             return false;
         };
-        matches!(key.trim(), "oauth_token" | "user")
-            && !value.trim().is_empty()
-            && value.trim() != "null"
+        key.trim() == "oauth_token" && !value.trim().is_empty() && value.trim() != "null"
     })
 }
 
@@ -84,6 +82,31 @@ fn keychain_allows_security_tool(_hosts_paths: &[PathBuf]) -> Result<bool, Strin
     Ok(false)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hosts_file_auth_material_detects_plaintext_tokens() {
+        let contents = "github.com:\n    user: monalisa\n    oauth_token: ghp_secret\n";
+
+        assert!(contains_gh_auth_material(contents));
+    }
+
+    #[test]
+    fn hosts_file_auth_material_ignores_user_only_entries() {
+        let contents = "github.com:\n    users:\n        monalisa:\n    user: monalisa\n";
+
+        assert!(!contains_gh_auth_material(contents));
+    }
+
+    #[test]
+    fn hosts_file_auth_material_ignores_empty_or_null_tokens() {
+        assert!(!contains_gh_auth_material("github.com:\n    oauth_token:\n"));
+        assert!(!contains_gh_auth_material("github.com:\n    oauth_token: null\n"));
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod macos_keychain {
     use std::ffi::c_void;
@@ -91,7 +114,6 @@ mod macos_keychain {
 
     const ERR_SEC_SUCCESS: i32 = 0;
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
-    const CF_NUMBER_SINT32_TYPE: i32 = 3;
     const CSSM_ACL_AUTHORIZATION_ANY: i32 = 1;
     const CSSM_ACL_AUTHORIZATION_DECRYPT: i32 = 24;
     const SEC_GENERIC_PASSWORD_ITEM_CLASS: u32 = u32::from_be_bytes(*b"genp");
@@ -101,7 +123,6 @@ mod macos_keychain {
     type CFTypeRef = *const c_void;
     type CFArrayRef = *const c_void;
     type CFDataRef = *const c_void;
-    type CFNumberRef = *const c_void;
     type CFStringRef = *const c_void;
     type SecAccessRef = *const c_void;
     type SecACLRef = *const c_void;
@@ -127,15 +148,14 @@ mod macos_keychain {
         fn CFArrayGetValueAtIndex(array: CFArrayRef, index: isize) -> *const c_void;
         fn CFDataGetBytePtr(data: CFDataRef) -> *const u8;
         fn CFDataGetLength(data: CFDataRef) -> isize;
-        fn CFNumberGetValue(number: CFNumberRef, the_type: i32, value_ptr: *mut c_void) -> bool;
         fn CFRelease(value: CFTypeRef);
-        fn SecACLCopyAuthorizations(acl: SecACLRef) -> CFArrayRef;
         fn SecACLCopyContents(
             acl: SecACLRef,
             application_list: *mut CFArrayRef,
             description: *mut CFStringRef,
             prompt_selector: *mut u16,
         ) -> i32;
+        fn SecACLGetAuthorizations(acl: SecACLRef, tags: *mut i32, tag_count: *mut u32) -> i32;
         fn SecAccessCopyACLList(access: SecAccessRef, acl_list: *mut CFArrayRef) -> i32;
         fn SecKeychainItemCopyAccess(
             item: SecKeychainItemRef,
@@ -262,36 +282,16 @@ mod macos_keychain {
     }
 
     fn acl_authorizes_secret_read(acl: SecACLRef) -> bool {
-        let authorizations = unsafe { SecACLCopyAuthorizations(acl) };
-        if authorizations.is_null() {
+        let mut tags = [0i32; 64];
+        let mut tag_count = tags.len() as u32;
+        let status = unsafe { SecACLGetAuthorizations(acl, tags.as_mut_ptr(), &mut tag_count) };
+        if status != ERR_SEC_SUCCESS {
             return false;
         }
-        let _authorizations_ref = ScopedCf(authorizations);
-
-        let authorization_count = unsafe { CFArrayGetCount(authorizations) };
-        for index in 0..authorization_count {
-            let authorization =
-                unsafe { CFArrayGetValueAtIndex(authorizations, index).cast::<c_void>() };
-            if authorization.is_null() {
-                continue;
-            }
-            if authorization_grants_secret_read(authorization) {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn authorization_grants_secret_read(authorization: CFNumberRef) -> bool {
-        let mut tag = 0i32;
-        let ok = unsafe {
-            CFNumberGetValue(
-                authorization,
-                CF_NUMBER_SINT32_TYPE,
-                (&mut tag as *mut i32).cast(),
-            )
-        };
-        ok && auth_tag_grants_secret_read(tag)
+        tags.iter()
+            .take(tag_count as usize)
+            .copied()
+            .any(auth_tag_grants_secret_read)
     }
 
     fn auth_tag_grants_secret_read(tag: i32) -> bool {
