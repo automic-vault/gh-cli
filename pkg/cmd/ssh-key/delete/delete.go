@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/prompter"
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -16,9 +17,10 @@ type DeleteOptions struct {
 	Config     func() (gh.Config, error)
 	HttpClient func() (*http.Client, error)
 
-	KeyID     string
-	Confirmed bool
-	Prompter  prompter.Prompter
+	KeyID        string
+	Confirmed    bool
+	Prompter     prompter.Prompter
+	ApprovalFunc func(args []string) error
 }
 
 func NewCmdDelete(f *cmdutil.Factory, runF func(*DeleteOptions) error) *cobra.Command {
@@ -78,6 +80,14 @@ func deleteRun(opts *DeleteOptions) error {
 		}
 	}
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForSSHKeyDelete
+	}
+	if err := approval([]string{"delete", "--hostname", host, "--key-id", opts.KeyID, "--title", key.Title}); err != nil {
+		return err
+	}
+
 	err = deleteSSHKey(httpClient, host, opts.KeyID)
 	if err != nil {
 		return err
@@ -88,4 +98,8 @@ func deleteRun(opts *DeleteOptions) error {
 		fmt.Fprintf(opts.IO.Out, "%s SSH key %q (%s) deleted from your account\n", cs.SuccessIcon(), key.Title, opts.KeyID)
 	}
 	return nil
+}
+
+func requestAutomicVaultApprovalForSSHKeyDelete(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh ssh-key", args))
 }

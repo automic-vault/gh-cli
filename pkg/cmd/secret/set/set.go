@@ -8,12 +8,14 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/cli/cli/v2/internal/prompter"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmd/secret/shared"
@@ -43,6 +45,7 @@ type SetOptions struct {
 	RepositoryNames []string
 	EnvFile         string
 	Application     string
+	ApprovalFunc    func(args []string) error
 }
 
 func NewCmdSet(f *cmdutil.Factory, runF func(*SetOptions) error) *cobra.Command {
@@ -286,6 +289,16 @@ func setRun(opts *SetOptions) error {
 		return result.err
 	}
 
+	if !opts.DoNotStore {
+		approval := opts.ApprovalFunc
+		if approval == nil {
+			approval = requestAutomicVaultApprovalForSecretSet
+		}
+		if err := approval(secretSetApprovalArgs(opts, host, baseRepo, secretEntity, secretApp, secrets)); err != nil {
+			return err
+		}
+	}
+
 	setc := make(chan setResult)
 	for secretKey, secret := range secrets {
 		key := secretKey
@@ -319,6 +332,38 @@ func setRun(opts *SetOptions) error {
 		fmt.Fprintf(opts.IO.Out, "%s Set %s secret %s for %s\n", cs.SuccessIcon(), secretApp.Title(), result.key, target)
 	}
 	return errors.Join(errs...)
+}
+
+func secretSetApprovalArgs(opts *SetOptions, host string, baseRepo ghrepo.Interface, entity shared.SecretEntity, app shared.App, secrets map[string][]byte) []string {
+	args := []string{"set", "--hostname", host, "--app", app.String(), "--entity", string(entity)}
+	switch entity {
+	case shared.Organization:
+		args = append(args, "--org", opts.OrgName, "--visibility", opts.Visibility)
+		if len(opts.RepositoryNames) > 0 {
+			args = append(args, "--repos", strings.Join(opts.RepositoryNames, ","))
+		}
+	case shared.Environment:
+		args = append(args, "--repo", ghrepo.FullName(baseRepo), "--env", opts.EnvName)
+	case shared.User:
+		args = append(args, "--user")
+		if len(opts.RepositoryNames) > 0 {
+			args = append(args, "--repos", strings.Join(opts.RepositoryNames, ","))
+		}
+	default:
+		args = append(args, "--repo", ghrepo.FullName(baseRepo))
+	}
+
+	names := make([]string, 0, len(secrets))
+	for name := range secrets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	args = append(args, "--secret-names", strings.Join(names, ","))
+	return args
+}
+
+func requestAutomicVaultApprovalForSecretSet(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh secret", args))
 }
 
 type setResult struct {

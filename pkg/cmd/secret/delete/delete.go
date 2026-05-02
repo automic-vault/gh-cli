@@ -7,6 +7,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmd/secret/shared"
@@ -21,11 +22,12 @@ type DeleteOptions struct {
 	Config     func() (gh.Config, error)
 	BaseRepo   func() (ghrepo.Interface, error)
 
-	SecretName  string
-	OrgName     string
-	EnvName     string
-	UserSecrets bool
-	Application string
+	SecretName   string
+	OrgName      string
+	EnvName      string
+	UserSecrets  bool
+	Application  string
+	ApprovalFunc func(args []string) error
 }
 
 func NewCmdDelete(f *cmdutil.Factory, runF func(*DeleteOptions) error) *cobra.Command {
@@ -140,6 +142,14 @@ func removeRun(opts *DeleteOptions) error {
 		host = baseRepo.RepoHost()
 	}
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForSecretDelete
+	}
+	if err := approval(secretDeleteApprovalArgs(opts, host, baseRepo, secretEntity, secretApp)); err != nil {
+		return err
+	}
+
 	err = client.REST(host, "DELETE", path, nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to delete secret %s: %w", opts.SecretName, err)
@@ -165,4 +175,29 @@ func removeRun(opts *DeleteOptions) error {
 	}
 
 	return nil
+}
+
+func secretDeleteApprovalArgs(opts *DeleteOptions, host string, baseRepo ghrepo.Interface, entity shared.SecretEntity, app shared.App) []string {
+	args := []string{
+		"delete",
+		"--hostname", host,
+		"--app", app.String(),
+		"--entity", string(entity),
+		"--secret-name", opts.SecretName,
+	}
+	switch entity {
+	case shared.Organization:
+		args = append(args, "--org", opts.OrgName)
+	case shared.Environment:
+		args = append(args, "--repo", ghrepo.FullName(baseRepo), "--env", opts.EnvName)
+	case shared.User:
+		args = append(args, "--user")
+	default:
+		args = append(args, "--repo", ghrepo.FullName(baseRepo))
+	}
+	return args
+}
+
+func requestAutomicVaultApprovalForSecretDelete(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh secret", args))
 }

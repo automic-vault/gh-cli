@@ -17,6 +17,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/ghinstance"
 	"github.com/cli/cli/v2/internal/ghrepo"
@@ -59,6 +60,7 @@ type ApiOptions struct {
 	CacheTTL            time.Duration
 	FilterOutput        string
 	Verbose             bool
+	ApprovalFunc        func(host, method, path string, graphqlMutation bool) error
 }
 
 func NewCmdApi(f *cmdutil.Factory, runF func(*ApiOptions) error) *cobra.Command {
@@ -409,6 +411,16 @@ func apiRun(opts *ApiOptions) error {
 		host = opts.Hostname
 	}
 
+	if shouldGateAPIRequest(method, requestPath, isGraphQL, params, opts.RequestInputFile != "") {
+		approval := opts.ApprovalFunc
+		if approval == nil {
+			approval = requestAutomicVaultApprovalForAPI
+		}
+		if err := approval(host, method, requestPath, isGraphQLMutation(params)); err != nil {
+			return err
+		}
+	}
+
 	tmpl := template.New(bodyWriter, opts.IO.TerminalWidth(), opts.IO.ColorEnabled())
 	err = tmpl.Parse(opts.Template)
 	if err != nil {
@@ -457,6 +469,38 @@ func apiRun(opts *ApiOptions) error {
 	}
 
 	return tmpl.Flush()
+}
+
+func shouldGateAPIRequest(method, requestPath string, isGraphQL bool, params map[string]interface{}, inputFile bool) bool {
+	if isGraphQL {
+		return isGraphQLMutation(params) || inputFile
+	}
+	return isMutatingHTTPMethod(method)
+}
+
+func isMutatingHTTPMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case "POST", "PUT", "PATCH", "DELETE":
+		return true
+	default:
+		return false
+	}
+}
+
+func isGraphQLMutation(params map[string]interface{}) bool {
+	query, ok := params["query"].(string)
+	if !ok {
+		return false
+	}
+	return regexp.MustCompile(`(?is)\bmutation\b`).MatchString(query)
+}
+
+func requestAutomicVaultApprovalForAPI(host, method, path string, graphqlMutation bool) error {
+	args := []string{"--hostname", host, "--method", strings.ToUpper(method), path}
+	if graphqlMutation {
+		args = append(args, "--graphql-mutation")
+	}
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh api", args))
 }
 
 var jsonContentTypeRE = regexp.MustCompile(`[/+]json(;|$)`)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/git"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/ghinstance"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmd/release/shared"
@@ -27,9 +28,10 @@ type DeleteOptions struct {
 	RepoOverride string
 	Prompter     iprompter
 
-	TagName     string
-	SkipConfirm bool
-	CleanupTag  bool
+	TagName      string
+	SkipConfirm  bool
+	CleanupTag   bool
+	ApprovalFunc func(args []string) error
 }
 
 func NewCmdDelete(f *cmdutil.Factory, runF func(*DeleteOptions) error) *cobra.Command {
@@ -92,6 +94,14 @@ func deleteRun(opts *DeleteOptions) error {
 		}
 	}
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForReleaseDelete
+	}
+	if err := approval(releaseDeleteApprovalArgs(opts, baseRepo, release.TagName)); err != nil {
+		return err
+	}
+
 	err = deleteRelease(httpClient, release.APIURL)
 	if err != nil {
 		return err
@@ -119,6 +129,23 @@ func deleteRun(opts *DeleteOptions) error {
 	}
 
 	return nil
+}
+
+func releaseDeleteApprovalArgs(opts *DeleteOptions, repo ghrepo.Interface, tagName string) []string {
+	args := []string{
+		"delete",
+		"--hostname", repo.RepoHost(),
+		"--repo", ghrepo.FullName(repo),
+		"--tag", tagName,
+	}
+	if opts.CleanupTag {
+		args = append(args, "--cleanup-tag")
+	}
+	return args
+}
+
+func requestAutomicVaultApprovalForReleaseDelete(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh release", args))
 }
 
 func deleteRelease(httpClient *http.Client, releaseURL string) error {

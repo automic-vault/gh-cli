@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/pkg/cmd/ssh-key/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -18,9 +19,10 @@ type AddOptions struct {
 	Config     func() (gh.Config, error)
 	HTTPClient func() (*http.Client, error)
 
-	KeyFile string
-	Title   string
-	Type    string
+	KeyFile      string
+	Title        string
+	Type         string
+	ApprovalFunc func(args []string) error
 }
 
 func NewCmdAdd(f *cmdutil.Factory, runF func(*AddOptions) error) *cobra.Command {
@@ -83,6 +85,14 @@ func runAdd(opts *AddOptions) error {
 
 	hostname, _ := cfg.Authentication().DefaultHost()
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForSSHKeyAdd
+	}
+	if err := approval([]string{"add", "--hostname", hostname, "--type", opts.Type, "--title", opts.Title}); err != nil {
+		return err
+	}
+
 	var uploaded bool
 
 	if opts.Type == shared.SigningKey {
@@ -104,4 +114,8 @@ func runAdd(opts *AddOptions) error {
 	}
 
 	return nil
+}
+
+func requestAutomicVaultApprovalForSSHKeyAdd(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh ssh-key", args))
 }

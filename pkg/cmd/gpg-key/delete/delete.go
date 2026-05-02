@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/prompter"
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -17,9 +18,10 @@ type DeleteOptions struct {
 	Config     func() (gh.Config, error)
 	HttpClient func() (*http.Client, error)
 
-	KeyID     string
-	Confirmed bool
-	Prompter  prompter.Prompter
+	KeyID        string
+	Confirmed    bool
+	Prompter     prompter.Prompter
+	ApprovalFunc func(args []string) error
 }
 
 func NewCmdDelete(f *cmdutil.Factory, runF func(*DeleteOptions) error) *cobra.Command {
@@ -89,6 +91,14 @@ func deleteRun(opts *DeleteOptions) error {
 		}
 	}
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForGPGKeyDelete
+	}
+	if err := approval([]string{"delete", "--hostname", host, "--key-id", opts.KeyID}); err != nil {
+		return err
+	}
+
 	err = deleteGPGKey(httpClient, host, id)
 	if err != nil {
 		return err
@@ -100,4 +110,8 @@ func deleteRun(opts *DeleteOptions) error {
 	}
 
 	return nil
+}
+
+func requestAutomicVaultApprovalForGPGKeyDelete(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh gpg-key", args))
 }

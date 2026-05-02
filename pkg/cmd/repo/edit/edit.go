@@ -13,6 +13,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/automicvault"
 	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/ghinstance"
 	"github.com/cli/cli/v2/internal/ghrepo"
@@ -68,6 +69,7 @@ type EditOptions struct {
 	InteractiveMode                    bool
 	Detector                           fd.Detector
 	Prompter                           iprompter
+	ApprovalFunc                       func(args []string) error
 	// Cache of current repo topics to avoid retrieving them
 	// in multiple flows.
 	topicsCache []string
@@ -306,6 +308,16 @@ func editRun(ctx context.Context, opts *EditOptions) error {
 		return err
 	}
 
+	if changes := sensitiveRepoEditApprovalArgs(opts, repo); len(changes) > 0 {
+		approval := opts.ApprovalFunc
+		if approval == nil {
+			approval = requestAutomicVaultApprovalForRepoEdit
+		}
+		if err := approval(changes); err != nil {
+			return err
+		}
+	}
+
 	g := errgroup.Group{}
 
 	if body.Len() > 3 {
@@ -355,6 +367,51 @@ func editRun(ctx context.Context, opts *EditOptions) error {
 	}
 
 	return nil
+}
+
+func sensitiveRepoEditApprovalArgs(opts *EditOptions, repo ghrepo.Interface) []string {
+	args := []string{"edit", "--hostname", repo.RepoHost(), ghrepo.FullName(repo)}
+	addBool := func(name string, value *bool) {
+		if value != nil {
+			args = append(args, name, fmt.Sprintf("%t", *value))
+		}
+	}
+	addString := func(name string, value *string) {
+		if value != nil {
+			args = append(args, name, *value)
+		}
+	}
+
+	addString("--visibility", opts.Edits.Visibility)
+	addString("--default-branch", opts.Edits.DefaultBranch)
+	addBool("--allow-forking", opts.Edits.AllowForking)
+	addBool("--template", opts.Edits.IsTemplate)
+	addBool("--delete-branch-on-merge", opts.Edits.DeleteBranchOnMerge)
+	addBool("--enable-merge-commit", opts.Edits.EnableMergeCommit)
+	addBool("--enable-squash-merge", opts.Edits.EnableSquashMerge)
+	addBool("--enable-rebase-merge", opts.Edits.EnableRebaseMerge)
+	addBool("--enable-auto-merge", opts.Edits.EnableAutoMerge)
+	if isFalse(opts.Edits.enableAdvancedSecurity) {
+		args = append(args, "--enable-advanced-security", "false")
+	}
+	if isFalse(opts.Edits.enableSecretScanning) {
+		args = append(args, "--enable-secret-scanning", "false")
+	}
+	if isFalse(opts.Edits.enableSecretScanningPushProtection) {
+		args = append(args, "--enable-secret-scanning-push-protection", "false")
+	}
+	if len(args) == 4 {
+		return nil
+	}
+	return args
+}
+
+func isFalse(value *bool) bool {
+	return value != nil && !*value
+}
+
+func requestAutomicVaultApprovalForRepoEdit(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh repo", args))
 }
 
 func interactiveChoice(p iprompter, r *api.Repository) ([]string, error) {

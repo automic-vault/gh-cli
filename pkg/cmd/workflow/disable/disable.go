@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmd/workflow/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -19,8 +20,9 @@ type DisableOptions struct {
 	BaseRepo   func() (ghrepo.Interface, error)
 	Prompter   iprompter
 
-	Selector string
-	Prompt   bool
+	Selector     string
+	Prompt       bool
+	ApprovalFunc func(args []string) error
 }
 
 type iprompter interface {
@@ -84,6 +86,14 @@ func runDisable(opts *DisableOptions) error {
 		return err
 	}
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForWorkflowDisable
+	}
+	if err := approval([]string{"disable", "--hostname", repo.RepoHost(), "--repo", ghrepo.FullName(repo), "--workflow", workflow.Base()}); err != nil {
+		return err
+	}
+
 	path := fmt.Sprintf("repos/%s/actions/workflows/%d/disable", ghrepo.FullName(repo), workflow.ID)
 	err = client.REST(repo.RepoHost(), "PUT", path, nil, nil)
 	if err != nil {
@@ -96,4 +106,8 @@ func runDisable(opts *DisableOptions) error {
 	}
 
 	return nil
+}
+
+func requestAutomicVaultApprovalForWorkflowDisable(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh workflow", args))
 }

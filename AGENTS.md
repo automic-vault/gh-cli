@@ -170,3 +170,62 @@ client.REST(hostname, "GET", "repos/owner/repo", nil, &data)
 ```
 
 For host resolution, use `cfg.Authentication().DefaultHost()` — not `ghinstance.Default()` which always returns `github.com`.
+
+## Automic Vault Approval Gates
+
+This fork intentionally carries small, command-local approval patches on top of
+upstream `cli/cli`. When merging a new upstream release, verify that these gates
+still sit immediately before the evaluated side effect and after target
+resolution. Do not gate raw argv when the command later resolves a different
+host, repository, run, workflow, or secret target.
+
+Shared approval protocol:
+- `internal/automicvault/approval.go`
+- Fail closed when Automic Vault.app is unavailable or denies the request.
+- Approval payloads should include host, resolved target, and action flags.
+- Approval payloads must not include secret values, token values, request
+  bodies, release notes, workflow inputs, or other sensitive content.
+
+Required gate coverage:
+- `gh auth token`: gate before reading or printing the token.
+- `gh api`: gate REST `POST`, `PUT`, `PATCH`, and `DELETE`; gate GraphQL
+  mutations and GraphQL requests read from `--input` because the operation
+  cannot be inspected safely.
+- `gh secret set` and `gh secret delete`: gate after resolving entity, app,
+  host, repository, organization, environment, user, visibility, and secret
+  names. Never include secret values.
+- `gh repo delete`: gate after resolving the exact repository.
+- `gh repo edit`: gate sensitive settings only, including visibility,
+  default branch, fork/template/merge policy changes, and disabling security
+  features.
+- `gh pr merge`: gate `--admin`, `--delete-branch`, `--auto`, and
+  `--disable-auto` paths after the pull request and base repository resolve.
+- `gh release create` and `gh release delete`: gate before publishing,
+  uploading assets, deleting releases, or deleting tags.
+- `gh workflow run`, `gh workflow enable`, and `gh workflow disable`: gate
+  after resolving the workflow and repository.
+- `gh run rerun`, `gh run cancel`, and `gh run delete`: gate after resolving
+  the run or job.
+- `gh ssh-key add/delete` and `gh gpg-key add/delete`: gate after resolving
+  the host and key metadata, before changing account authority.
+
+Auth changes:
+- Do not add an extra Automic Vault gate to normal browser/device auth flows.
+  The GitHub browser hop is already a human approval boundary.
+- Only gate `gh auth` changes that can complete without a browser/device hop,
+  or that expose credentials directly.
+
+Upstream merge checklist:
+1. Search new or changed command packages for `REST(..., "POST"`,
+   `REST(..., "PUT"`, `REST(..., "PATCH"`, `REST(..., "DELETE"`,
+   `GraphQL` mutations, `http.NewRequest("POST"`, `http.NewRequest("PUT"`,
+   `http.NewRequest("PATCH"`, and `http.NewRequest("DELETE"`.
+2. Compare each write path against the approval criteria in the top-level
+   repository README.
+3. If a command already prompts, keep that prompt. Automic Vault approval is
+   still required for agent and non-TTY execution at meaningful risk
+   boundaries.
+4. Keep every patch narrow. Prefer adding a command-local approval call over
+   changing request construction or shared command behavior.
+5. Add tests with an explicit approval stub for both approval and denial paths
+   when changing a command gate.

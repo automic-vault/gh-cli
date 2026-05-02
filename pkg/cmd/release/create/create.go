@@ -11,6 +11,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/git"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/internal/text"
@@ -61,6 +62,7 @@ type CreateOptions struct {
 	VerifyTag          bool
 	NotesFromTag       bool
 	FailOnNoCommits    bool
+	ApprovalFunc       func(args []string) error
 }
 
 func NewCmdCreate(f *cmdutil.Factory, runF func(*CreateOptions) error) *cobra.Command {
@@ -510,6 +512,14 @@ func createRun(opts *CreateOptions) error {
 		params["draft"] = true
 	}
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForReleaseCreate
+	}
+	if err := approval(releaseCreateApprovalArgs(opts, baseRepo, hasAssets)); err != nil {
+		return err
+	}
+
 	newRelease, err := createRelease(httpClient, baseRepo, params)
 
 	var errMissingRequiredWorkflowScope *errMissingRequiredWorkflowScope
@@ -565,6 +575,32 @@ func createRun(opts *CreateOptions) error {
 	fmt.Fprintf(opts.IO.Out, "%s\n", newRelease.URL)
 
 	return nil
+}
+
+func releaseCreateApprovalArgs(opts *CreateOptions, repo ghrepo.Interface, hasAssets bool) []string {
+	args := []string{
+		"create",
+		"--hostname", repo.RepoHost(),
+		"--repo", ghrepo.FullName(repo),
+		"--tag", opts.TagName,
+	}
+	if opts.Draft {
+		args = append(args, "--draft")
+	}
+	if opts.Prerelease {
+		args = append(args, "--prerelease")
+	}
+	if opts.Target != "" {
+		args = append(args, "--target", opts.Target)
+	}
+	if hasAssets {
+		args = append(args, "--asset-count", fmt.Sprintf("%d", len(opts.Assets)))
+	}
+	return args
+}
+
+func requestAutomicVaultApprovalForReleaseCreate(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh release", args))
 }
 
 func gitTagInfo(client *git.Client, tagName string) (string, error) {

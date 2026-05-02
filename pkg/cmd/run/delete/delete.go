@@ -7,6 +7,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/internal/prompter"
 	"github.com/cli/cli/v2/pkg/cmd/run/shared"
@@ -20,12 +21,13 @@ const (
 )
 
 type DeleteOptions struct {
-	HttpClient func() (*http.Client, error)
-	IO         *iostreams.IOStreams
-	BaseRepo   func() (ghrepo.Interface, error)
-	Prompter   prompter.Prompter
-	Prompt     bool
-	RunID      string
+	HttpClient   func() (*http.Client, error)
+	IO           *iostreams.IOStreams
+	BaseRepo     func() (ghrepo.Interface, error)
+	Prompter     prompter.Prompter
+	Prompt       bool
+	RunID        string
+	ApprovalFunc func(args []string) error
 }
 
 func NewCmdDelete(f *cmdutil.Factory, runF func(*DeleteOptions) error) *cobra.Command {
@@ -121,6 +123,14 @@ func runDelete(opts *DeleteOptions) error {
 		}
 	}
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForRunDelete
+	}
+	if err := approval([]string{"delete", "--hostname", repo.RepoHost(), "--repo", ghrepo.FullName(repo), "--run", fmt.Sprintf("%d", run.ID)}); err != nil {
+		return err
+	}
+
 	err = deleteWorkflowRun(client, repo, fmt.Sprintf("%d", run.ID))
 	if err != nil {
 		var httpErr api.HTTPError
@@ -135,6 +145,10 @@ func runDelete(opts *DeleteOptions) error {
 
 	fmt.Fprintf(opts.IO.Out, "%s Request to delete workflow run submitted.\n", cs.SuccessIcon())
 	return nil
+}
+
+func requestAutomicVaultApprovalForRunDelete(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh run", args))
 }
 
 func deleteWorkflowRun(client *api.Client, repo ghrepo.Interface, runID string) error {

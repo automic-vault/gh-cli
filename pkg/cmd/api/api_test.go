@@ -408,6 +408,62 @@ func Test_NewCmdApi(t *testing.T) {
 	}
 }
 
+func TestShouldGateAPIRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		method    string
+		path      string
+		graphQL   bool
+		params    map[string]interface{}
+		inputFile bool
+		want      bool
+	}{
+		{
+			name:   "rest get",
+			method: "GET",
+			path:   "repos/OWNER/REPO",
+			want:   false,
+		},
+		{
+			name:   "rest delete",
+			method: "DELETE",
+			path:   "repos/OWNER/REPO",
+			want:   true,
+		},
+		{
+			name:    "graphql query",
+			method:  "POST",
+			path:    "graphql",
+			graphQL: true,
+			params:  map[string]interface{}{"query": "query { viewer { login } }"},
+			want:    false,
+		},
+		{
+			name:    "graphql mutation",
+			method:  "POST",
+			path:    "graphql",
+			graphQL: true,
+			params:  map[string]interface{}{"query": "mutation { addStar(input: {}) { starrable { id } } }"},
+			want:    true,
+		},
+		{
+			name:      "graphql input file",
+			method:    "POST",
+			path:      "graphql",
+			graphQL:   true,
+			inputFile: true,
+			want:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldGateAPIRequest(tt.method, tt.path, tt.graphQL, tt.params, tt.inputFile)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func Test_NewCmdApi_WindowsAbsPath(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.SkipNow()

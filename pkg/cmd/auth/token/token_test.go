@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/config"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -304,7 +305,7 @@ func TestTokenRunRequiresAutomicVaultApproval(t *testing.T) {
 func TestRequestAutomicVaultApprovalApproves(t *testing.T) {
 	request := newAutomicVaultApprovalRequest("github.com", "")
 	socketPath := startAutomicVaultApprovalServer(t, func(t *testing.T, requestLine string) []string {
-		var decoded automicVaultApprovalRequest
+		var decoded automicvault.ApprovalRequest
 		require.NoError(t, json.Unmarshal([]byte(requestLine), &decoded))
 		require.Equal(t, "approval_request", decoded.Type)
 		require.Equal(t, "gh auth token", decoded.Intent.Tool)
@@ -317,13 +318,13 @@ func TestRequestAutomicVaultApprovalApproves(t *testing.T) {
 	})
 	t.Setenv("VAULT_SOCKET_PATH", socketPath)
 
-	require.NoError(t, requestAutomicVaultApproval(request))
+	require.NoError(t, automicvault.RequestApproval(request))
 }
 
 func TestRequestAutomicVaultApprovalDenies(t *testing.T) {
 	request := newAutomicVaultApprovalRequest("github.com", "")
 	socketPath := startAutomicVaultApprovalServer(t, func(t *testing.T, requestLine string) []string {
-		var decoded automicVaultApprovalRequest
+		var decoded automicvault.ApprovalRequest
 		require.NoError(t, json.Unmarshal([]byte(requestLine), &decoded))
 		return []string{
 			`{"type":"approval_response","id":"` + decoded.ID + `","approved":false,"reason":"Denied by operator"}`,
@@ -331,7 +332,7 @@ func TestRequestAutomicVaultApprovalDenies(t *testing.T) {
 	})
 	t.Setenv("VAULT_SOCKET_PATH", socketPath)
 
-	err := requestAutomicVaultApproval(request)
+	err := automicvault.RequestApproval(request)
 
 	require.EqualError(t, err, "Denied by operator")
 }
@@ -339,7 +340,7 @@ func TestRequestAutomicVaultApprovalDenies(t *testing.T) {
 func TestRequestAutomicVaultApprovalFailsClosedWhenUnavailable(t *testing.T) {
 	t.Setenv("VAULT_SOCKET_PATH", filepath.Join(t.TempDir(), "missing.sock"))
 
-	err := requestAutomicVaultApproval(newAutomicVaultApprovalRequest("github.com", ""))
+	err := automicvault.RequestApproval(newAutomicVaultApprovalRequest("github.com", ""))
 
 	require.ErrorContains(t, err, "automic vault approval unavailable")
 }

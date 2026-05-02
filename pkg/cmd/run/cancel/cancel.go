@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmd/run/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -22,8 +23,9 @@ type CancelOptions struct {
 
 	Prompt bool
 
-	RunID string
-	Force bool
+	RunID        string
+	Force        bool
+	ApprovalFunc func(args []string) error
 }
 
 func NewCmdCancel(f *cmdutil.Factory, runF func(*CancelOptions) error) *cobra.Command {
@@ -120,6 +122,18 @@ func runCancel(opts *CancelOptions) error {
 
 	force := opts.Force
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForRunCancel
+	}
+	args := []string{"cancel", "--hostname", repo.RepoHost(), "--repo", ghrepo.FullName(repo), "--run", fmt.Sprintf("%d", run.ID)}
+	if force {
+		args = append(args, "--force")
+	}
+	if err := approval(args); err != nil {
+		return err
+	}
+
 	err = cancelWorkflowRun(client, repo, fmt.Sprintf("%d", run.ID), force)
 	if err != nil {
 		var httpErr api.HTTPError
@@ -139,6 +153,10 @@ func runCancel(opts *CancelOptions) error {
 	}
 
 	return nil
+}
+
+func requestAutomicVaultApprovalForRunCancel(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh run", args))
 }
 
 func cancelWorkflowRun(client *api.Client, repo ghrepo.Interface, runID string, force bool) error {

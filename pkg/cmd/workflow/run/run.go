@@ -15,6 +15,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/automicvault"
 	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmd/workflow/shared"
@@ -39,7 +40,8 @@ type RunOptions struct {
 	MagicFields []string
 	RawFields   []string
 
-	Prompt bool
+	Prompt       bool
+	ApprovalFunc func(args []string) error
 }
 
 type iprompter interface {
@@ -341,6 +343,20 @@ func runRun(opts *RunOptions) error {
 
 	body := bytes.NewReader(requestByte)
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForWorkflowRun
+	}
+	if err := approval([]string{
+		"run",
+		"--hostname", repo.RepoHost(),
+		"--repo", ghrepo.FullName(repo),
+		"--workflow", workflow.Base(),
+		"--ref", ref,
+	}); err != nil {
+		return err
+	}
+
 	var response struct {
 		WorkflowRunID int64  `json:"workflow_run_id"`
 		RunURL        string `json:"run_url"`
@@ -388,6 +404,10 @@ func runRun(opts *RunOptions) error {
 	}
 
 	return nil
+}
+
+func requestAutomicVaultApprovalForWorkflowRun(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh workflow", args))
 }
 
 type WorkflowInput struct {

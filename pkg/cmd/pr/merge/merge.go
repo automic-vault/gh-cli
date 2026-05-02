@@ -10,6 +10,7 @@ import (
 	"github.com/cli/cli/v2/api"
 	ghContext "github.com/cli/cli/v2/context"
 	"github.com/cli/cli/v2/git"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmd/pr/shared"
@@ -52,6 +53,7 @@ type MergeOptions struct {
 	CanDeleteLocalBranch    bool
 	MergeStrategyEmpty      bool
 	MatchHeadCommit         string
+	ApprovalFunc            func(args []string) error
 }
 
 // ErrAlreadyInMergeQueue indicates that the pull request is already in a merge queue
@@ -204,6 +206,9 @@ type mergeContext struct {
 
 // Attempt to disable auto merge on the pull request.
 func (m *mergeContext) disableAutoMerge() error {
+	if err := m.requestRiskApproval("disable-auto"); err != nil {
+		return err
+	}
 	if err := disableAutoMerge(m.httpClient, m.baseRepo, m.pr.ID); err != nil {
 		return err
 	}
@@ -345,6 +350,10 @@ func (m *mergeContext) merge() error {
 		}
 	}
 
+	if err := m.requestRiskApproval("merge"); err != nil {
+		return err
+	}
+
 	err := mergePullRequest(m.httpClient, payload)
 	if err != nil {
 		return err
@@ -480,6 +489,40 @@ func (m *mergeContext) deleteRemoteBranch() error {
 	}
 
 	return m.infof("%s Deleted remote branch %s\n", m.cs.SuccessIconWithColor(m.cs.Red), m.cs.Cyan(m.pr.HeadRefName))
+}
+
+func (m *mergeContext) requestRiskApproval(action string) error {
+	if action == "merge" && !m.opts.UseAdmin && !m.deleteBranch && !m.opts.AutoMergeEnable {
+		return nil
+	}
+	args := []string{
+		"merge",
+		"--hostname", m.baseRepo.RepoHost(),
+		"--repo", ghrepo.FullName(m.baseRepo),
+		"--pr", fmt.Sprintf("%d", m.pr.Number),
+		"--action", action,
+	}
+	if m.opts.UseAdmin {
+		args = append(args, "--admin")
+	}
+	if m.deleteBranch {
+		args = append(args, "--delete-branch")
+	}
+	if m.opts.AutoMergeEnable {
+		args = append(args, "--auto")
+	}
+	if m.opts.AutoMergeDisable {
+		args = append(args, "--disable-auto")
+	}
+	approval := m.opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForPRMerge
+	}
+	return approval(args)
+}
+
+func requestAutomicVaultApprovalForPRMerge(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh pr", args))
 }
 
 // Add the Pull Request to a merge queue

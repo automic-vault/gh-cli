@@ -10,6 +10,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmd/run/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -28,7 +29,8 @@ type RerunOptions struct {
 	JobID      string
 	Debug      bool
 
-	Prompt bool
+	Prompt       bool
+	ApprovalFunc func(args []string) error
 }
 
 func NewCmdRerun(f *cmdutil.Factory, runF func(*RerunOptions) error) *cobra.Command {
@@ -146,6 +148,9 @@ func runRerun(opts *RerunOptions) error {
 	}
 
 	if opts.JobID != "" {
+		if err := requestRerunApproval(opts, repo, "job", fmt.Sprintf("%d", selectedJob.ID)); err != nil {
+			return err
+		}
 		err = rerunJob(client, repo, selectedJob, opts.Debug)
 		if err != nil {
 			return err
@@ -165,6 +170,9 @@ func runRerun(opts *RerunOptions) error {
 			return fmt.Errorf("failed to get run: %w", err)
 		}
 
+		if err := requestRerunApproval(opts, repo, "run", fmt.Sprintf("%d", run.ID)); err != nil {
+			return err
+		}
 		err = rerunRun(client, repo, run, opts.OnlyFailed, opts.Debug)
 		if err != nil {
 			return err
@@ -183,6 +191,30 @@ func runRerun(opts *RerunOptions) error {
 	}
 
 	return nil
+}
+
+func requestRerunApproval(opts *RerunOptions, repo ghrepo.Interface, targetKind, targetID string) error {
+	args := []string{
+		"rerun",
+		"--hostname", repo.RepoHost(),
+		"--repo", ghrepo.FullName(repo),
+		"--" + targetKind, targetID,
+	}
+	if opts.OnlyFailed {
+		args = append(args, "--failed")
+	}
+	if opts.Debug {
+		args = append(args, "--debug")
+	}
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForRunRerun
+	}
+	return approval(args)
+}
+
+func requestAutomicVaultApprovalForRunRerun(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh run", args))
 }
 
 func rerunRun(client *api.Client, repo ghrepo.Interface, run *shared.Run, onlyFailed, debug bool) error {

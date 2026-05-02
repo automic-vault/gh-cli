@@ -8,6 +8,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -20,12 +21,13 @@ type iprompter interface {
 }
 
 type DeleteOptions struct {
-	HttpClient func() (*http.Client, error)
-	BaseRepo   func() (ghrepo.Interface, error)
-	Prompter   iprompter
-	IO         *iostreams.IOStreams
-	RepoArg    string
-	Confirmed  bool
+	HttpClient   func() (*http.Client, error)
+	BaseRepo     func() (ghrepo.Interface, error)
+	Prompter     iprompter
+	IO           *iostreams.IOStreams
+	RepoArg      string
+	Confirmed    bool
+	ApprovalFunc func(args []string) error
 }
 
 func NewCmdDelete(f *cmdutil.Factory, runF func(*DeleteOptions) error) *cobra.Command {
@@ -121,6 +123,14 @@ func deleteRun(opts *DeleteOptions) error {
 		}
 	}
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForRepoDelete
+	}
+	if err := approval([]string{"delete", "--hostname", toDelete.RepoHost(), fullName}); err != nil {
+		return err
+	}
+
 	err = deleteRepo(httpClient, toDelete)
 	if err != nil {
 		var httpErr api.HTTPError
@@ -146,4 +156,8 @@ func deleteRun(opts *DeleteOptions) error {
 	}
 
 	return nil
+}
+
+func requestAutomicVaultApprovalForRepoDelete(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh repo", args))
 }

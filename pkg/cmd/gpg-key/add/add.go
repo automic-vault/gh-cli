@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/MakeNowJust/heredoc"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -19,8 +20,9 @@ type AddOptions struct {
 	Config     func() (gh.Config, error)
 	HTTPClient func() (*http.Client, error)
 
-	KeyFile string
-	Title   string
+	KeyFile      string
+	Title        string
+	ApprovalFunc func(args []string) error
 }
 
 func NewCmdAdd(f *cmdutil.Factory, runF func(*AddOptions) error) *cobra.Command {
@@ -81,6 +83,14 @@ func runAdd(opts *AddOptions) error {
 
 	hostname, _ := cfg.Authentication().DefaultHost()
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForGPGKeyAdd
+	}
+	if err := approval([]string{"add", "--hostname", hostname, "--title", opts.Title}); err != nil {
+		return err
+	}
+
 	err = gpgKeyUpload(httpClient, hostname, keyReader, opts.Title)
 	if err != nil {
 		cs := opts.IO.ColorScheme()
@@ -109,4 +119,8 @@ func runAdd(opts *AddOptions) error {
 		fmt.Fprintf(opts.IO.Out, "%s GPG key added to your account\n", cs.SuccessIcon())
 	}
 	return nil
+}
+
+func requestAutomicVaultApprovalForGPGKeyAdd(args []string) error {
+	return automicvault.RequestApproval(automicvault.NewApprovalRequest("gh gpg-key", args))
 }
