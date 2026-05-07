@@ -85,6 +85,47 @@ fn keychain_allows_security_tool(_hosts_paths: &[PathBuf]) -> Result<bool, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::{Mutex, OnceLock};
+    use tempfile::TempDir;
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_lock() -> &'static Mutex<()> {
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvGuard {
+        fn set(values: &[(&'static str, Option<&str>)]) -> Self {
+            let previous = values
+                .iter()
+                .map(|(key, value)| {
+                    let previous = std::env::var_os(key);
+                    match value {
+                        Some(value) => unsafe { std::env::set_var(key, value) },
+                        None => unsafe { std::env::remove_var(key) },
+                    }
+                    (*key, previous)
+                })
+                .collect();
+            Self { previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, previous) in self.previous.drain(..).rev() {
+                match previous {
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        }
+    }
 
     #[test]
     fn hosts_file_auth_material_detects_plaintext_tokens() {
@@ -104,6 +145,53 @@ mod tests {
     fn hosts_file_auth_material_ignores_empty_or_null_tokens() {
         assert!(!contains_gh_auth_material("github.com:\n    oauth_token:\n"));
         assert!(!contains_gh_auth_material("github.com:\n    oauth_token: null\n"));
+    }
+
+    #[test]
+    fn install_detection_uses_explicit_config_dir_hosts_file() {
+        let _lock = env_lock().lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("hosts.yml"),
+            "github.com:\n    oauth_token: ghp_secret\n",
+        )
+        .unwrap();
+        let _env = EnvGuard::set(&[
+            ("GH_CONFIG_DIR", Some(temp.path().to_str().unwrap())),
+            ("XDG_CONFIG_HOME", None),
+            ("HOME", Some(temp.path().to_str().unwrap())),
+        ]);
+
+        assert!(install_is_insecure().unwrap());
+        assert_eq!(gh_hosts_paths().unwrap(), vec![temp.path().join("hosts.yml")]);
+    }
+
+    #[test]
+    fn install_detection_uses_xdg_and_home_paths_without_tokens() {
+        let _lock = env_lock().lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let xdg = temp.path().join("xdg");
+        let home = temp.path().join("home");
+        fs::create_dir_all(xdg.join("gh")).unwrap();
+        fs::create_dir_all(home.join(".config/gh")).unwrap();
+        fs::write(xdg.join("gh/hosts.yml"), "github.example.com:\n    user: me\n").unwrap();
+        fs::write(home.join(".config/gh/hosts.yml"), "github.com:\n").unwrap();
+        let _env = EnvGuard::set(&[
+            ("GH_CONFIG_DIR", None),
+            ("XDG_CONFIG_HOME", Some(xdg.to_str().unwrap())),
+            ("HOME", Some(home.to_str().unwrap())),
+        ]);
+
+        assert!(!install_is_insecure().unwrap());
+        let hosts_paths = gh_hosts_paths().unwrap();
+        assert_eq!(hosts_paths.first().unwrap(), &xdg.join("gh/hosts.yml"));
+        assert_eq!(
+            gh_keychain_services(&[xdg.join("gh/hosts.yml"), home.join(".config/gh/hosts.yml")]),
+            vec![
+                "gh:github.com".to_string(),
+                "gh:github.example.com".to_string()
+            ]
+        );
     }
 }
 
