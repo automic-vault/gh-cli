@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -12,8 +13,9 @@ import (
 )
 
 type GetOptions struct {
-	IO     *iostreams.IOStreams
-	Config gh.Config
+	IO           *iostreams.IOStreams
+	Config       gh.Config
+	ApprovalFunc func() error
 
 	Hostname string
 	Key      string
@@ -58,6 +60,13 @@ func getRun(opts *GetOptions) error {
 		token, _ := opts.Config.Authentication().ActiveToken(opts.Hostname)
 		if token == "" {
 			return errors.New(`could not find key "oauth_token"`)
+		}
+		if opts.ApprovalFunc != nil {
+			if err := opts.ApprovalFunc(); err != nil {
+				return err
+			}
+		} else if err := automicvault.RequestApproval("gh config get", []string{"--host", opts.Hostname, "oauth_token"}); err != nil {
+			return err
 		}
 		fmt.Fprintf(opts.IO.Out, "%s\n", token)
 		return nil

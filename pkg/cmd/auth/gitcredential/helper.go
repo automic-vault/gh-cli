@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/spf13/cobra"
@@ -19,8 +20,9 @@ type config interface {
 }
 
 type CredentialOptions struct {
-	IO     *iostreams.IOStreams
-	Config func() (config, error)
+	IO           *iostreams.IOStreams
+	Config       func() (config, error)
+	ApprovalFunc func() error
 
 	Operation string
 }
@@ -133,6 +135,14 @@ func helperRun(opts *CredentialOptions) error {
 
 	if wants["username"] != "" && gotUser != tokenUser && !strings.EqualFold(wants["username"], gotUser) {
 		return cmdutil.SilentError
+	}
+
+	if opts.ApprovalFunc != nil {
+		if err := opts.ApprovalFunc(); err != nil {
+			return err
+		}
+	} else if err := automicvault.RequestApproval("gh auth git-credential", []string{opts.Operation}); err != nil {
+		return err
 	}
 
 	fmt.Fprint(opts.IO.Out, "protocol=https\n")

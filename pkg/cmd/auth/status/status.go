@@ -11,6 +11,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/config"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/pkg/cmd/auth/shared"
@@ -115,10 +116,11 @@ func (e authEntry) String(cs *iostreams.ColorScheme) string {
 }
 
 type StatusOptions struct {
-	HttpClient func() (*http.Client, error)
-	IO         *iostreams.IOStreams
-	Config     func() (gh.Config, error)
-	Exporter   cmdutil.Exporter
+	HttpClient   func() (*http.Client, error)
+	IO           *iostreams.IOStreams
+	Config       func() (gh.Config, error)
+	Exporter     cmdutil.Exporter
+	ApprovalFunc func() error
 
 	Hostname  string
 	ShowToken bool
@@ -218,6 +220,16 @@ func statusRun(opts *StatusOptions) error {
 			return nil
 		}
 		return cmdutil.SilentError
+	}
+
+	if opts.ShowToken {
+		if opts.ApprovalFunc != nil {
+			if err := opts.ApprovalFunc(); err != nil {
+				return err
+			}
+		} else if err := automicvault.RequestApproval("gh auth status", statusApprovalArgs(opts)); err != nil {
+			return err
+		}
 	}
 
 	httpClient, err := opts.HttpClient()
@@ -324,6 +336,20 @@ func statusRun(opts *StatusOptions) error {
 	}
 
 	return finalErr
+}
+
+func statusApprovalArgs(opts *StatusOptions) []string {
+	args := []string{"--show-token"}
+	if opts.Hostname != "" {
+		args = append(args, "--hostname", opts.Hostname)
+	}
+	if opts.Active {
+		args = append(args, "--active")
+	}
+	if opts.Exporter != nil {
+		args = append(args, "--json", "hosts")
+	}
+	return args
 }
 
 func maskToken(token string) string {
