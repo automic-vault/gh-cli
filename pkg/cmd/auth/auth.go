@@ -1,6 +1,7 @@
 package auth
 
 import (
+	authAVMigrateCmd "github.com/cli/cli/v2/pkg/cmd/auth/avmigrate"
 	gitCredentialCmd "github.com/cli/cli/v2/pkg/cmd/auth/gitcredential"
 	authLoginCmd "github.com/cli/cli/v2/pkg/cmd/auth/login"
 	authLogoutCmd "github.com/cli/cli/v2/pkg/cmd/auth/logout"
@@ -28,6 +29,7 @@ func NewCmdAuth(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(authRefreshCmd.NewCmdRefresh(f, nil))
 	cmd.AddCommand(gitCredentialCmd.NewCmdCredential(f, nil))
 	cmd.AddCommand(authSetupGitCmd.NewCmdSetupGit(f, nil))
+	cmd.AddCommand(authAVMigrateCmd.NewCmdAVMigrate(f, nil))
 	cmd.AddCommand(authTokenCmd.NewCmdToken(f, nil))
 	cmd.AddCommand(authSwitchCmd.NewCmdSwitch(f, nil))
 

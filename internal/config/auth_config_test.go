@@ -300,6 +300,35 @@ func TestLoginInsecureStorage(t *testing.T) {
 	requireKeyWithValue(t, authCfg.cfg, []string{hostsKey, "github.com", oauthTokenKey}, "test-token")
 }
 
+func TestSecureLoginStoresOnlyInKeyring(t *testing.T) {
+	authCfg := newTestAuthConfig(t)
+
+	err := authCfg.SecureLogin("github.com", "test-user", "test-token", "")
+	require.NoError(t, err)
+
+	gotToken, err := keyring.Get(keyringServiceName("github.com"), "")
+	require.NoError(t, err)
+	require.Equal(t, "test-token", gotToken)
+
+	gotToken, err = keyring.Get(keyringServiceName("github.com"), "test-user")
+	require.NoError(t, err)
+	require.Equal(t, "test-token", gotToken)
+
+	requireNoKey(t, authCfg.cfg, []string{hostsKey, "github.com", oauthTokenKey})
+	requireNoKey(t, authCfg.cfg, []string{hostsKey, "github.com", usersKey, "test-user", oauthTokenKey})
+}
+
+func TestSecureLoginFailsClosedWhenKeyringErrors(t *testing.T) {
+	authCfg := newTestAuthConfig(t)
+	keyring.MockInitWithError(errors.New("test-explosion"))
+
+	err := authCfg.SecureLogin("github.com", "test-user", "test-token", "")
+	require.EqualError(t, err, "failed to store user token in keychain: test-explosion")
+
+	requireNoKey(t, authCfg.cfg, []string{hostsKey, "github.com", oauthTokenKey})
+	requireNoKey(t, authCfg.cfg, []string{hostsKey, "github.com", usersKey, "test-user", oauthTokenKey})
+}
+
 func TestLoginSetsUserForProvidedHost(t *testing.T) {
 	// Given we are not logged in
 	authCfg := newTestAuthConfig(t)
