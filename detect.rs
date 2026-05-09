@@ -1,6 +1,11 @@
 use std::path::PathBuf;
 
 pub fn install_is_insecure() -> Result<bool, String> {
+    install_insecurity_reasons().map(|reasons| !reasons.is_empty())
+}
+
+pub fn install_insecurity_reasons() -> Result<Vec<String>, String> {
+    let mut reasons = Vec::new();
     let hosts_paths = gh_hosts_paths()?;
     for path in &hosts_paths {
         if !path.exists() {
@@ -9,15 +14,21 @@ pub fn install_is_insecure() -> Result<bool, String> {
         let contents = std::fs::read_to_string(&path)
             .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
         if contains_gh_auth_material(&contents) {
-            return Ok(true);
+            reasons.push(format!(
+                "GitHub CLI hosts file contains plaintext OAuth material: {}",
+                path.display()
+            ));
         }
     }
 
     if keychain_allows_security_tool(&hosts_paths)? {
-        return Ok(true);
+        reasons.push(
+            "GitHub CLI keychain item allows non-interactive extraction by the security tool"
+                .to_string(),
+        );
     }
 
-    Ok(false)
+    Ok(reasons)
 }
 
 fn gh_hosts_paths() -> Result<Vec<PathBuf>, String> {
@@ -143,8 +154,12 @@ mod tests {
 
     #[test]
     fn hosts_file_auth_material_ignores_empty_or_null_tokens() {
-        assert!(!contains_gh_auth_material("github.com:\n    oauth_token:\n"));
-        assert!(!contains_gh_auth_material("github.com:\n    oauth_token: null\n"));
+        assert!(!contains_gh_auth_material(
+            "github.com:\n    oauth_token:\n"
+        ));
+        assert!(!contains_gh_auth_material(
+            "github.com:\n    oauth_token: null\n"
+        ));
     }
 
     #[test]
@@ -175,8 +190,17 @@ mod tests {
             ("HOME", Some(temp.path().to_str().unwrap())),
         ]);
 
-        assert!(install_is_insecure().unwrap());
-        assert_eq!(gh_hosts_paths().unwrap(), vec![temp.path().join("hosts.yml")]);
+        let reasons = install_insecurity_reasons().unwrap();
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.contains("GitHub CLI hosts file")),
+            "expected hosts file reason, got {reasons:?}"
+        );
+        assert_eq!(
+            gh_hosts_paths().unwrap(),
+            vec![temp.path().join("hosts.yml")]
+        );
     }
 
     #[test]
@@ -187,7 +211,11 @@ mod tests {
         let home = temp.path().join("home");
         fs::create_dir_all(xdg.join("gh")).unwrap();
         fs::create_dir_all(home.join(".config/gh")).unwrap();
-        fs::write(xdg.join("gh/hosts.yml"), "github.example.com:\n    user: me\n").unwrap();
+        fs::write(
+            xdg.join("gh/hosts.yml"),
+            "github.example.com:\n    user: me\n",
+        )
+        .unwrap();
         fs::write(home.join(".config/gh/hosts.yml"), "github.com:\n").unwrap();
         let _env = EnvGuard::set(&[
             ("GH_CONFIG_DIR", None),
@@ -196,6 +224,7 @@ mod tests {
         ]);
 
         assert!(!install_is_insecure().unwrap());
+        assert!(install_insecurity_reasons().unwrap().is_empty());
         let hosts_paths = gh_hosts_paths().unwrap();
         assert_eq!(hosts_paths.first().unwrap(), &xdg.join("gh/hosts.yml"));
         assert_eq!(
@@ -374,10 +403,7 @@ mod macos_keychain {
         ) -> i32;
         fn SecACLGetAuthorizations(acl: SecACLRef, tags: *mut i32, tag_count: *mut u32) -> i32;
         fn SecAccessCopyACLList(access: SecAccessRef, acl_list: *mut CFArrayRef) -> i32;
-        fn SecKeychainItemCopyAccess(
-            item: SecKeychainItemRef,
-            access: *mut SecAccessRef,
-        ) -> i32;
+        fn SecKeychainItemCopyAccess(item: SecKeychainItemRef, access: *mut SecAccessRef) -> i32;
         fn SecKeychainSearchCopyNext(
             search: SecKeychainSearchRef,
             item: *mut SecKeychainItemRef,
