@@ -1,3 +1,31 @@
+# Automic Vault Fork Notes
+
+This repository is the Automic Vault fork of GitHub CLI.
+
+Automic Vault is a macOS-first secret and execution control system that
+keeps sensitive credentials behind explicit human approval in the Automic
+Vault GUI app instead of exposing them directly to terminal tools.
+
+This fork currently adds the following behavior on top of upstream `cli/cli`:
+
+- Direct macOS Keychain access from the signed `gh` binary instead of
+  `/usr/bin/security`, so Keychain trust is attached to this app binary.
+- Human approval gating through the Automic Vault GUI daemon before commands
+  print stored tokens in plain text. This covers `gh auth token`,
+  `gh auth status --show-token`, `gh config get -h HOST oauth_token`, and the
+  hidden `gh auth git-credential get` helper.
+- A migration [subcommand] that the Automic Vault app uses when migrating
+  secrets from the factory-release to our isotope.
+- A hazard detector for insecure `gh` installs, including plaintext
+  `hosts.yml` tokens and Keychain ACLs that allow `/usr/bin/security` to read
+  `gh` secrets.
+
+The remainder of this README is the original upstream GitHub CLI README.
+
+[subcommand]: ./pkg/cmd/auth/avmigrate
+
+---
+
 # GitHub CLI
 
 `gh` is GitHub on the command line. It brings pull requests, issues, and other GitHub concepts to the terminal next to where you are already working with `git` and your code.
