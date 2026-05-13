@@ -148,6 +148,19 @@ mod tests {
     }
 
     #[test]
+    fn hosts_file_auth_material_ignores_non_mapping_lines() {
+        assert!(!contains_gh_auth_material("oauth_token"));
+        assert!(!contains_gh_auth_material("oauth_token = secret"));
+    }
+
+    #[test]
+    fn hosts_file_auth_material_trims_key_spacing() {
+        assert!(contains_gh_auth_material(
+            "github.com:\n    oauth_token : ghp_secret\n"
+        ));
+    }
+
+    #[test]
     fn install_detection_uses_explicit_config_dir_hosts_file() {
         let _lock = env_lock().lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -192,6 +205,122 @@ mod tests {
                 "gh:github.example.com".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn host_path_resolution_requires_home_without_config_overrides() {
+        let _lock = env_lock().lock().unwrap();
+        let _env = EnvGuard::set(&[
+            ("GH_CONFIG_DIR", None),
+            ("XDG_CONFIG_HOME", None),
+            ("HOME", None),
+        ]);
+
+        let err = gh_hosts_paths().unwrap_err();
+        assert!(err.contains("HOME is not set"));
+    }
+
+    #[test]
+    fn empty_overrides_fall_back_to_home_hosts_path() {
+        let _lock = env_lock().lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(home.join(".config/gh")).unwrap();
+        let _env = EnvGuard::set(&[
+            ("GH_CONFIG_DIR", Some("")),
+            ("XDG_CONFIG_HOME", Some("")),
+            ("HOME", Some(home.to_str().unwrap())),
+        ]);
+
+        assert_eq!(
+            gh_hosts_paths().unwrap(),
+            vec![home.join(".config/gh/hosts.yml")]
+        );
+    }
+
+    #[test]
+    fn keychain_services_ignore_duplicate_and_invalid_hosts() {
+        let temp = TempDir::new().unwrap();
+        let hosts = temp.path().join("hosts.yml");
+        fs::write(
+            &hosts,
+            "github.com:\n  oauth_token: ghp_secret\nhosts:\ncustom.example.com:\ncustom.example.com:\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            gh_keychain_services(&[hosts]),
+            vec![
+                "gh:custom.example.com".to_string(),
+                "gh:github.com".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn install_detection_reads_home_hosts_file_when_present() {
+        let _lock = env_lock().lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(home.join(".config/gh")).unwrap();
+        fs::write(
+            home.join(".config/gh/hosts.yml"),
+            "github.com:\n    oauth_token: ghp_secret\n",
+        )
+        .unwrap();
+        let _env = EnvGuard::set(&[
+            ("GH_CONFIG_DIR", None),
+            ("XDG_CONFIG_HOME", None),
+            ("HOME", Some(home.to_str().unwrap())),
+        ]);
+
+        assert!(install_is_insecure().unwrap());
+    }
+
+    #[test]
+    fn explicit_config_dir_does_not_require_home() {
+        let _lock = env_lock().lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let _env = EnvGuard::set(&[
+            ("GH_CONFIG_DIR", Some(temp.path().to_str().unwrap())),
+            ("XDG_CONFIG_HOME", None),
+            ("HOME", None),
+        ]);
+
+        assert_eq!(gh_hosts_paths().unwrap(), vec![temp.path().join("hosts.yml")]);
+    }
+
+    #[test]
+    fn install_detection_returns_false_when_only_home_path_is_missing() {
+        let _lock = env_lock().lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(home.join(".config/gh")).unwrap();
+        let _env = EnvGuard::set(&[
+            ("GH_CONFIG_DIR", None),
+            ("XDG_CONFIG_HOME", None),
+            ("HOME", Some(home.to_str().unwrap())),
+        ]);
+
+        assert!(!install_is_insecure().unwrap());
+    }
+
+    #[test]
+    fn keychain_services_skip_unreadable_and_non_host_lines() {
+        let temp = TempDir::new().unwrap();
+        let hosts = temp.path().join("hosts.yml");
+        let missing = temp.path().join("missing.yml");
+        fs::write(&hosts, "\nusers:\n  me:\nnot-a-host\n").unwrap();
+
+        assert_eq!(
+            gh_keychain_services(&[missing, hosts]),
+            vec!["gh:github.com".to_string(), "gh:users".to_string()]
+        );
+    }
+
+    #[test]
+    fn keychain_services_include_github_by_default() {
+        assert_eq!(gh_keychain_services(&[]), vec!["gh:github.com".to_string()]);
     }
 }
 
