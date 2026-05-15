@@ -97,14 +97,7 @@ fn keychain_allows_security_tool(_hosts_paths: &[PathBuf]) -> Result<bool, Strin
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
-
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn env_lock() -> &'static Mutex<()> {
-        ENV_LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     struct EnvGuard {
         previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
@@ -177,7 +170,7 @@ mod tests {
 
     #[test]
     fn install_detection_uses_explicit_config_dir_hosts_file() {
-        let _lock = env_lock().lock().unwrap();
+        let _lock = crate::global_test_env_lock().lock().unwrap();
         let temp = TempDir::new().unwrap();
         fs::write(
             temp.path().join("hosts.yml"),
@@ -205,7 +198,7 @@ mod tests {
 
     #[test]
     fn install_detection_uses_xdg_and_home_paths_without_tokens() {
-        let _lock = env_lock().lock().unwrap();
+        let _lock = crate::global_test_env_lock().lock().unwrap();
         let temp = TempDir::new().unwrap();
         let xdg = temp.path().join("xdg");
         let home = temp.path().join("home");
