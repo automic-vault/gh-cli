@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn keychain_services_skip_unreadable_and_non_host_lines() {
+    fn keychain_services_skip_unreadable_and_collect_top_level_keys() {
         let temp = TempDir::new().unwrap();
         let hosts = temp.path().join("hosts.yml");
         let missing = temp.path().join("missing.yml");
