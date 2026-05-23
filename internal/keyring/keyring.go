@@ -9,6 +9,7 @@ import (
 )
 
 var ErrNotFound = errors.New("secret not found in keyring")
+var mockProvider bool
 
 type TimeoutError struct {
 	message string
@@ -23,7 +24,11 @@ func Set(service, user, secret string) error {
 	ch := make(chan error, 1)
 	go func() {
 		defer close(ch)
-		ch <- keyring.Set(service, user, secret)
+		if mockProvider {
+			ch <- keyring.Set(service, user, secret)
+			return
+		}
+		ch <- set(service, user, secret)
 	}()
 	select {
 	case err := <-ch:
@@ -41,7 +46,13 @@ func Get(service, user string) (string, error) {
 	}, 1)
 	go func() {
 		defer close(ch)
-		val, err := keyring.Get(service, user)
+		var val string
+		var err error
+		if mockProvider {
+			val, err = keyring.Get(service, user)
+		} else {
+			val, err = get(service, user)
+		}
 		ch <- struct {
 			val string
 			err error
@@ -63,7 +74,11 @@ func Delete(service, user string) error {
 	ch := make(chan error, 1)
 	go func() {
 		defer close(ch)
-		ch <- keyring.Delete(service, user)
+		if mockProvider {
+			ch <- keyring.Delete(service, user)
+			return
+		}
+		ch <- deleteSecret(service, user)
 	}()
 	select {
 	case err := <-ch:
@@ -74,9 +89,11 @@ func Delete(service, user string) error {
 }
 
 func MockInit() {
+	mockProvider = true
 	keyring.MockInit()
 }
 
 func MockInitWithError(err error) {
+	mockProvider = true
 	keyring.MockInitWithError(err)
 }

@@ -389,6 +389,34 @@ func (c *AuthConfig) Login(hostname, username, token, gitProtocol string, secure
 	return insecureStorageUsed, c.activateUser(hostname, username)
 }
 
+// SecureLogin stores and activates a token in keychain-backed storage only.
+//
+// Unlike Login with secureStorage enabled, this method will not fall back to
+// writing oauth_token into the plain-text config file if keychain access fails.
+func (c *AuthConfig) SecureLogin(hostname, username, token, gitProtocol string) error {
+	if err := keyring.Set(keyringServiceName(hostname), username, token); err != nil {
+		return fmt.Errorf("failed to store user token in keychain: %w", err)
+	}
+	if err := keyring.Set(keyringServiceName(hostname), "", token); err != nil {
+		return fmt.Errorf("failed to store active token in keychain: %w", err)
+	}
+
+	_ = c.cfg.Remove([]string{hostsKey, hostname, oauthTokenKey})
+	_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username, oauthTokenKey})
+
+	if gitProtocol != "" {
+		c.cfg.Set([]string{hostsKey, hostname, gitProtocolKey}, gitProtocol)
+	}
+
+	if _, err := c.cfg.Get([]string{hostsKey, hostname, usersKey, username}); err != nil {
+		c.cfg.Set([]string{hostsKey, hostname, usersKey, username}, "")
+	}
+
+	c.cfg.Set([]string{hostsKey, hostname, userKey}, username)
+
+	return ghConfig.Write(c.cfg)
+}
+
 func (c *AuthConfig) SwitchUser(hostname, user string) error {
 	previouslyActiveUser, err := c.ActiveUser(hostname)
 	if err != nil {
