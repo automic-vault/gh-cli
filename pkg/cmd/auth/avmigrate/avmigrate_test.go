@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/cli/cli/v2/internal/config"
@@ -141,6 +142,8 @@ func TestMigrateRunErrorsWithoutKeychainToken(t *testing.T) {
 }
 
 func TestMigrateRunFailsClosedWhenKeyringWriteFails(t *testing.T) {
+	skipUnlessDarwin(t)
+
 	ios, _, _, _ := iostreams.Test()
 	cfg, _ := config.NewIsolatedTestConfig(t)
 	keyring.MockInitWithError(errors.New("test-explosion"))
@@ -246,6 +249,8 @@ func TestMigrateRunRestoresLegacyItemsWhenSecureLoginFails(t *testing.T) {
 }
 
 func TestLegacySecurityArgsUseLoginKeychainWhenAvailable(t *testing.T) {
+	skipUnlessDarwin(t)
+
 	home := t.TempDir()
 	keychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 	require.NoError(t, os.MkdirAll(filepath.Dir(keychain), 0755))
@@ -261,6 +266,13 @@ func TestLegacySecurityArgsUseLoginKeychainWhenAvailable(t *testing.T) {
 		"-w",
 		keychain,
 	}, args)
+}
+
+func skipUnlessDarwin(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		t.Skip("legacy macOS keychain migration coverage; add Linux/Windows credential-store coverage when those backends are supported")
+	}
 }
 
 func TestLegacySecurityArgsFallBackToAmbientSearchList(t *testing.T) {
