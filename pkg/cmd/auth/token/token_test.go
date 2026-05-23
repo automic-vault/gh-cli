@@ -2,6 +2,7 @@ package token
 
 import (
 	"bytes"
+	"os"
 	"testing"
 
 	"github.com/cli/cli/v2/internal/config"
@@ -164,6 +165,7 @@ func TestTokenRun(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ios, _, stdout, _ := iostreams.Test()
 			tt.opts.IO = ios
+			tt.opts.ApprovalFunc = approveAutomicVaultRequest
 
 			for k, v := range tt.env {
 				t.Setenv(k, v)
@@ -251,6 +253,7 @@ func TestTokenRunSecureStorage(t *testing.T) {
 			ios, _, stdout, _ := iostreams.Test()
 			tt.opts.IO = ios
 			tt.opts.SecureStorage = true
+			tt.opts.ApprovalFunc = approveAutomicVaultRequest
 
 			cfg, _ := config.NewIsolatedTestConfig(t)
 			if tt.cfgStubs != nil {
@@ -273,8 +276,34 @@ func TestTokenRunSecureStorage(t *testing.T) {
 	}
 }
 
+func TestTokenRunRequiresAutomicVaultApproval(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+	cfg, _ := config.NewIsolatedTestConfig(t)
+	login(t, cfg, "github.com", "test-user", "gho_ABCDEFG", "https", false)
+
+	opts := &TokenOptions{
+		IO: ios,
+		Config: func() (gh.Config, error) {
+			return cfg, nil
+		},
+		ApprovalFunc: func(hostname, username string) error {
+			require.Equal(t, "github.com", hostname)
+			require.Empty(t, username)
+			return os.ErrPermission
+		},
+	}
+
+	err := tokenRun(opts)
+
+	require.ErrorIs(t, err, os.ErrPermission)
+}
+
 func login(t *testing.T, c gh.Config, hostname, username, token, gitProtocol string, secureStorage bool) {
 	t.Helper()
 	_, err := c.Authentication().Login(hostname, username, token, gitProtocol, secureStorage)
 	require.NoError(t, err)
+}
+
+func approveAutomicVaultRequest(_, _ string) error {
+	return nil
 }

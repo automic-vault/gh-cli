@@ -2,6 +2,7 @@ package login
 
 import (
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/MakeNowJust/heredoc"
@@ -218,6 +219,27 @@ func Test_helperRun(t *testing.T) {
 			wantStderr: "",
 		},
 		{
+			name: "approval denied",
+			opts: CredentialOptions{
+				Operation: "get",
+				Config: func() (config, error) {
+					return tinyConfig{
+						"_source":                 "/Users/monalisa/.config/gh/hosts.yml",
+						"example.com:user":        "monalisa",
+						"example.com:oauth_token": "OTOKEN",
+					}, nil
+				},
+				ApprovalFunc: func() error { return os.ErrPermission },
+			},
+			input: heredoc.Doc(`
+				protocol=https
+				host=example.com
+			`),
+			wantErr:    true,
+			wantStdout: "",
+			wantStderr: "",
+		},
+		{
 			name: "noop store operation",
 			opts: CredentialOptions{
 				Operation: "store",
@@ -243,6 +265,9 @@ func Test_helperRun(t *testing.T) {
 			fmt.Fprint(stdin, tt.input)
 			opts := &tt.opts
 			opts.IO = ios
+			if opts.ApprovalFunc == nil {
+				opts.ApprovalFunc = func() error { return nil }
+			}
 			if err := helperRun(opts); (err != nil) != tt.wantErr {
 				t.Fatalf("helperRun() error = %v, wantErr %v", err, tt.wantErr)
 			}
