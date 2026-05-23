@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc"
+	"github.com/cli/cli/v2/internal/automicvault"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -18,6 +19,7 @@ type TokenOptions struct {
 	Hostname      string
 	Username      string
 	SecureStorage bool
+	ApprovalFunc  func(hostname, username string) error
 }
 
 func NewCmdToken(f *cmdutil.Factory, runF func(*TokenOptions) error) *cobra.Command {
@@ -66,6 +68,14 @@ func tokenRun(opts *TokenOptions) error {
 		hostname, _ = authCfg.DefaultHost()
 	}
 
+	approval := opts.ApprovalFunc
+	if approval == nil {
+		approval = requestAutomicVaultApprovalForToken
+	}
+	if err := approval(hostname, opts.Username); err != nil {
+		return err
+	}
+
 	var val string
 	// If this conditional logic ends up being duplicated anywhere,
 	// we should consider making a factory function that returns the correct
@@ -97,4 +107,12 @@ func tokenRun(opts *TokenOptions) error {
 	}
 
 	return nil
+}
+
+func requestAutomicVaultApprovalForToken(hostname, username string) error {
+	args := []string{"--hostname", hostname}
+	if username != "" {
+		args = append(args, "--user", username)
+	}
+	return automicvault.RequestApproval("gh auth token", args)
 }

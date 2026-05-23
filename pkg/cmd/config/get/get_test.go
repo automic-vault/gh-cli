@@ -2,6 +2,7 @@ package get
 
 import (
 	"bytes"
+	"os"
 	"testing"
 
 	"github.com/cli/cli/v2/internal/config"
@@ -108,6 +109,36 @@ func Test_getRun(t *testing.T) {
 				}(),
 			},
 			stdout: "vim\n",
+		},
+		{
+			name: "get oauth token scoped by host",
+			input: &GetOptions{
+				Hostname: "github.com",
+				Key:      "oauth_token",
+				Config: func() gh.Config {
+					cfg := config.NewBlankConfig()
+					_, err := cfg.Authentication().Login("github.com", "monalisa", "OTOKEN", "https", false)
+					require.NoError(t, err)
+					return cfg
+				}(),
+				ApprovalFunc: func() error { return nil },
+			},
+			stdout: "OTOKEN\n",
+		},
+		{
+			name: "get oauth token requires approval",
+			input: &GetOptions{
+				Hostname: "github.com",
+				Key:      "oauth_token",
+				Config: func() gh.Config {
+					cfg := config.NewBlankConfig()
+					_, err := cfg.Authentication().Login("github.com", "monalisa", "OTOKEN", "https", false)
+					require.NoError(t, err)
+					return cfg
+				}(),
+				ApprovalFunc: func() error { return os.ErrPermission },
+			},
+			err: os.ErrPermission,
 		},
 		{
 			name: "non-existent key",

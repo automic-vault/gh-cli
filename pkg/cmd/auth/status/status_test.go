@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -358,6 +359,18 @@ func Test_statusRun(t *testing.T) {
 				  - Token: gho_xyz456
 				  - Token scopes: 'repo', 'read:org'
 			`),
+		},
+		{
+			name: "show token requires approval",
+			opts: StatusOptions{
+				ShowToken:    true,
+				ApprovalFunc: func() error { return os.ErrPermission },
+			},
+			cfgStubs: func(t *testing.T, c gh.Config) {
+				login(t, c, "github.com", "monalisa", "gho_abc123", "https")
+			},
+			httpStubs: func(reg *httpmock.Registry) {},
+			wantErr:   os.ErrPermission,
 		},
 		{
 			name: "missing hostname",
@@ -739,6 +752,9 @@ func Test_statusRun(t *testing.T) {
 				jsonExporter := cmdutil.NewJSONExporter()
 				jsonExporter.SetFields(tt.jsonFields)
 				tt.opts.Exporter = jsonExporter
+			}
+			if tt.opts.ShowToken && tt.opts.ApprovalFunc == nil {
+				tt.opts.ApprovalFunc = func() error { return nil }
 			}
 
 			for k, v := range tt.env {
