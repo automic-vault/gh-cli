@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn host_path_resolution_requires_home_without_config_overrides() {
-        let _lock = env_lock().lock().unwrap();
+        let _lock = crate::global_test_env_lock().lock().unwrap();
         let _env = EnvGuard::set(&[
             ("GH_CONFIG_DIR", None),
             ("XDG_CONFIG_HOME", None),
@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn empty_overrides_fall_back_to_home_hosts_path() {
-        let _lock = env_lock().lock().unwrap();
+        let _lock = crate::global_test_env_lock().lock().unwrap();
         let temp = TempDir::new().unwrap();
         let home = temp.path().join("home");
         fs::create_dir_all(home.join(".config/gh")).unwrap();
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn install_detection_reads_home_hosts_file_when_present() {
-        let _lock = env_lock().lock().unwrap();
+        let _lock = crate::global_test_env_lock().lock().unwrap();
         let temp = TempDir::new().unwrap();
         let home = temp.path().join("home");
         fs::create_dir_all(home.join(".config/gh")).unwrap();
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn explicit_config_dir_does_not_require_home() {
-        let _lock = env_lock().lock().unwrap();
+        let _lock = crate::global_test_env_lock().lock().unwrap();
         let temp = TempDir::new().unwrap();
         let _env = EnvGuard::set(&[
             ("GH_CONFIG_DIR", Some(temp.path().to_str().unwrap())),
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn install_detection_returns_false_when_only_home_path_is_missing() {
-        let _lock = env_lock().lock().unwrap();
+        let _lock = crate::global_test_env_lock().lock().unwrap();
         let temp = TempDir::new().unwrap();
         let home = temp.path().join("home");
         fs::create_dir_all(home.join(".config/gh")).unwrap();
