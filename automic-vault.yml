@@ -12,7 +12,7 @@ build: |
   tar czf out.tgz bin
 
 migrate: |
-  /opt/isotopes/gh/bin/gh auth av-migrate "$@"
+  /opt/iso/gh/bin/gh auth av-migrate "$@"
 
 justification:
   title:
