@@ -83,12 +83,12 @@ fn gh_keychain_services(hosts_paths: &[PathBuf]) -> Vec<String> {
     services
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(coverage)))]
 fn keychain_allows_security_tool(hosts_paths: &[PathBuf]) -> Result<bool, String> {
     macos_keychain::keychain_allows_security_tool(&gh_keychain_services(hosts_paths))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(not(target_os = "macos"), coverage))]
 fn keychain_allows_security_tool(_hosts_paths: &[PathBuf]) -> Result<bool, String> {
     Ok(false)
 }
@@ -346,7 +346,7 @@ mod tests {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(coverage)))]
 mod macos_keychain {
     use std::ffi::c_void;
     use std::ptr;
