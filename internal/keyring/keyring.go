@@ -9,6 +9,9 @@ import (
 )
 
 var ErrNotFound = errors.New("secret not found in keyring")
+var mockProvider bool
+
+const keyringTimeout = 5 * time.Minute
 
 type TimeoutError struct {
 	message string
@@ -23,12 +26,17 @@ func Set(service, user, secret string) error {
 	ch := make(chan error, 1)
 	go func() {
 		defer close(ch)
-		ch <- keyring.Set(service, user, secret)
+		if mockProvider {
+			ch <- keyring.Set(service, user, secret)
+			return
+		}
+		ch <- set(service, user, secret)
 	}()
 	select {
 	case err := <-ch:
 		return err
-	case <-time.After(60 * time.Second):
+<<<<<<< HEAD
+	case <-time.After(keyringTimeout):
 		return &TimeoutError{"timeout while trying to set secret in keyring"}
 	}
 }
@@ -41,7 +49,13 @@ func Get(service, user string) (string, error) {
 	}, 1)
 	go func() {
 		defer close(ch)
-		val, err := keyring.Get(service, user)
+		var val string
+		var err error
+		if mockProvider {
+			val, err = keyring.Get(service, user)
+		} else {
+			val, err = get(service, user)
+		}
 		ch <- struct {
 			val string
 			err error
@@ -53,7 +67,8 @@ func Get(service, user string) (string, error) {
 			return "", ErrNotFound
 		}
 		return res.val, res.err
-	case <-time.After(60 * time.Second):
+<<<<<<< HEAD
+	case <-time.After(keyringTimeout):
 		return "", &TimeoutError{"timeout while trying to get secret from keyring"}
 	}
 }
@@ -63,20 +78,27 @@ func Delete(service, user string) error {
 	ch := make(chan error, 1)
 	go func() {
 		defer close(ch)
-		ch <- keyring.Delete(service, user)
+		if mockProvider {
+			ch <- keyring.Delete(service, user)
+			return
+		}
+		ch <- deleteSecret(service, user)
 	}()
 	select {
 	case err := <-ch:
 		return err
-	case <-time.After(60 * time.Second):
+<<<<<<< HEAD
+	case <-time.After(keyringTimeout):
 		return &TimeoutError{"timeout while trying to delete secret from keyring"}
 	}
 }
 
 func MockInit() {
+	mockProvider = true
 	keyring.MockInit()
 }
 
 func MockInitWithError(err error) {
+	mockProvider = true
 	keyring.MockInitWithError(err)
 }
