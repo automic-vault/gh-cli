@@ -1,3 +1,23 @@
+# Automic Vault Fork Notes
+
+This repository is the Automic Vault fork of GitHub CLI.
+
+Automic Vault is a macOS-first secret and execution control system that
+keeps sensitive credentials behind explicit human approval in the Automic
+Vault GUI app instead of exposing them directly to terminal tools.
+
+This fork currently adds the following behavior on top of upstream `cli/cli`:
+
+- On-demand token retrieval through the Automic Vault GUI helper over XPC
+  instead of direct `gh` Keychain reads.
+- Request metadata for token reads so Automic Vault can show the human what
+  `gh` is asking for before releasing a stored token.
+- Compatibility with Automic Vault's `gh` detectors and hardener.
+
+The remainder of this README is the original upstream GitHub CLI README.
+
+---
+
 # GitHub CLI
 
 `gh` is GitHub on the command line. It brings pull requests, issues, and other GitHub concepts to the terminal next to where you are already working with `git` and your code.
