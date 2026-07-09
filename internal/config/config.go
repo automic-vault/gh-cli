@@ -287,29 +287,20 @@ func (c *AuthConfig) ActiveTokenType(hostname string) gh.TokenType {
 	return gh.TokenTypeUnknown
 }
 
-// ActiveToken retrieves the active credential for the given hostname, searching environment variables, plain text
-// config, and lastly encrypted storage. It returns the last stored token as-is, including the current access token of
-// a refreshable credential, and never contacts the token endpoint to refresh it. Callers that need a token valid for
-// API calls should use ActiveTokenWithRefresh.
+// ActiveToken retrieves the active credential for the given hostname, searching environment variables and encrypted
+// storage. It returns the last stored token as-is, including the current access token of a refreshable credential, and
+// never contacts the token endpoint to refresh it. Callers that need a token valid for API calls should use
+// ActiveTokenWithRefresh.
 func (c *AuthConfig) ActiveToken(hostname string) gh.Credential {
 	if c.tokenOverride != nil {
 		token, source := c.tokenOverride(hostname)
 		return gh.Credential{Source: source, Token: token}
 	}
-
-	token, source := ghauth.TokenFromEnvOrConfig(hostname)
+	token, source := tokenFromEnv(hostname)
 	if token != "" {
 		return gh.Credential{Source: source, Token: token}
 	}
 
-	// Intentional behavior change from older gh: the active-user lookup goes through TokenForUser, which also consults
-	// the per-user config oauth_token and the refreshable slot, rather than only the per-user keyring slot. This is
-	// groundwork for refreshable credentials and is the more correct result. The only observable difference is when a
-	// user has a per-user config oauth_token (or refreshable record) but no per-user keyring slot while an unkeyed
-	// keyring token also exists: older gh returned the unkeyed keyring token, whereas we now return the per-user
-	// credential. That state is rare because activateUser mirrors a per-user insecure token into the host-level
-	// oauth_token, which TokenFromEnvOrConfig resolves above before we reach here. This is accepted and pinned by
-	// TestActiveTokenPrefersPerUserConfigTokenOverUnkeyedKeyring.
 	if user, err := c.ActiveUser(hostname); err == nil {
 		if credential, err := c.TokenForUser(hostname, user); err == nil {
 			return credential
@@ -350,9 +341,6 @@ func (c *AuthConfig) HasActiveToken(hostname string) bool {
 // HasEnvToken returns true when a token has been specified in an
 // environment variable, else returns false.
 func (c *AuthConfig) HasEnvToken() bool {
-	// This will check if there are any environment variable
-	// authentication tokens set for enterprise hosts.
-	// Any non-github.com hostname is fine here
 	hostname := "example.com"
 	if c.tokenOverride != nil {
 		token, _ := c.tokenOverride(hostname)
@@ -360,12 +348,10 @@ func (c *AuthConfig) HasEnvToken() bool {
 			return true
 		}
 	}
-	// TODO: This is _extremely_ knowledgeable about the implementation of TokenFromEnvOrConfig
-	// It has to use a hostname that is not going to be found in the hosts so that it
-	// can guarantee that tokens will only be returned from a set env var.
-	// Discussed here, but maybe worth revisiting: https://github.com/cli/cli/pull/7169#discussion_r1136979033
-	token, _ := ghauth.TokenFromEnvOrConfig(hostname)
-	return token != ""
+	return os.Getenv("GH_TOKEN") != "" ||
+		os.Getenv("GITHUB_TOKEN") != "" ||
+		os.Getenv("GH_ENTERPRISE_TOKEN") != "" ||
+		os.Getenv("GITHUB_ENTERPRISE_TOKEN") != ""
 }
 
 // SetActiveToken will override any token resolution and return the given
@@ -476,8 +462,8 @@ func (c *AuthConfig) SetDefaultHost(host, source string) {
 }
 
 // Login will set user, git protocol, and auth token for the given hostname.
-// If the encrypt option is specified it will first try to store the auth token
-// in encrypted storage and will fall back to the plain text config file.
+// If the encrypt option is specified it stores the auth token in encrypted
+// storage. Plain text fallback is intentionally disabled in this build.
 func (c *AuthConfig) Login(hostname, username, token, gitProtocol string, secureStorage bool) (bool, error) {
 	// Run under the shared refresh lock, like LoginRefreshable and Logout, so login serializes against an in-flight
 	// refresh and wins either ordering: a refresh that persists first is superseded by the credential stored here, and
@@ -501,6 +487,9 @@ func (c *AuthConfig) login(hostname, username, token, gitProtocol string, secure
 		if setErr == nil {
 			// Clean up the previous oauth_token from the config file, if there were one
 			_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username, oauthTokenKey})
+			_ = c.cfg.Remove([]string{hostsKey, hostname, oauthTokenKey})
+		} else {
+			return false, fmt.Errorf("failed to store token in keyring: %w", setErr)
 		}
 	}
 	insecureStorageUsed := false
@@ -700,10 +689,6 @@ func (c *AuthConfig) TokenForUser(hostname, user string) (gh.Credential, error) 
 		return gh.Credential{}, err
 	}
 
-	if token, err := c.cfg.Get([]string{hostsKey, hostname, usersKey, user, oauthTokenKey}); err == nil {
-		return gh.Credential{Source: gh.TokenSourceOAuthToken, Token: token}, nil
-	}
-
 	return gh.Credential{Source: gh.TokenSourceDefault}, fmt.Errorf("no token found for '%s'", user)
 }
 
@@ -723,6 +708,26 @@ func (c *AuthConfig) TokenForUserWithRefresh(hostname, username string) (gh.Cred
 
 func keyringServiceName(hostname string) string {
 	return "gh:" + hostname
+}
+
+func tokenFromEnv(hostname string) (string, string) {
+	normalizedHost := ghauth.NormalizeHostname(hostname)
+	if normalizedHost == "github.com" || ghauth.IsTenancy(normalizedHost) || normalizedHost == "github.localhost" {
+		if token := os.Getenv("GH_TOKEN"); token != "" {
+			return token, "GH_TOKEN"
+		}
+		if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+			return token, "GITHUB_TOKEN"
+		}
+	} else {
+		if token := os.Getenv("GH_ENTERPRISE_TOKEN"); token != "" {
+			return token, "GH_ENTERPRISE_TOKEN"
+		}
+		if token := os.Getenv("GITHUB_ENTERPRISE_TOKEN"); token != "" {
+			return token, "GITHUB_ENTERPRISE_TOKEN"
+		}
+	}
+	return "", ""
 }
 
 type AliasConfig struct {
