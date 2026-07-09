@@ -232,13 +232,12 @@ type AuthConfig struct {
 }
 
 // ActiveToken will retrieve the active auth token for the given hostname,
-// searching environment variables, plain text config, and
-// lastly encrypted storage.
+// searching environment variables and encrypted storage.
 func (c *AuthConfig) ActiveToken(hostname string) (string, string) {
 	if c.tokenOverride != nil {
 		return c.tokenOverride(hostname)
 	}
-	token, source := ghauth.TokenFromEnvOrConfig(hostname)
+	token, source := tokenFromEnv(hostname)
 	if token == "" {
 		var user string
 		var err error
@@ -268,9 +267,6 @@ func (c *AuthConfig) HasActiveToken(hostname string) bool {
 // HasEnvToken returns true when a token has been specified in an
 // environment variable, else returns false.
 func (c *AuthConfig) HasEnvToken() bool {
-	// This will check if there are any environment variable
-	// authentication tokens set for enterprise hosts.
-	// Any non-github.com hostname is fine here
 	hostname := "example.com"
 	if c.tokenOverride != nil {
 		token, _ := c.tokenOverride(hostname)
@@ -278,12 +274,10 @@ func (c *AuthConfig) HasEnvToken() bool {
 			return true
 		}
 	}
-	// TODO: This is _extremely_ knowledgeable about the implementation of TokenFromEnvOrConfig
-	// It has to use a hostname that is not going to be found in the hosts so that it
-	// can guarantee that tokens will only be returned from a set env var.
-	// Discussed here, but maybe worth revisiting: https://github.com/cli/cli/pull/7169#discussion_r1136979033
-	token, _ := ghauth.TokenFromEnvOrConfig(hostname)
-	return token != ""
+	return os.Getenv("GH_TOKEN") != "" ||
+		os.Getenv("GITHUB_TOKEN") != "" ||
+		os.Getenv("GH_ENTERPRISE_TOKEN") != "" ||
+		os.Getenv("GITHUB_ENTERPRISE_TOKEN") != ""
 }
 
 // SetActiveToken will override any token resolution and return the given
@@ -351,8 +345,8 @@ func (c *AuthConfig) SetDefaultHost(host, source string) {
 }
 
 // Login will set user, git protocol, and auth token for the given hostname.
-// If the encrypt option is specified it will first try to store the auth token
-// in encrypted storage and will fall back to the plain text config file.
+// If the encrypt option is specified it stores the auth token in encrypted
+// storage. Plain text fallback is intentionally disabled in this build.
 func (c *AuthConfig) Login(hostname, username, token, gitProtocol string, secureStorage bool) (bool, error) {
 	// In this section we set up the users config
 	var setErr error
@@ -362,6 +356,9 @@ func (c *AuthConfig) Login(hostname, username, token, gitProtocol string, secure
 		if setErr == nil {
 			// Clean up the previous oauth_token from the config file, if there were one
 			_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username, oauthTokenKey})
+			_ = c.cfg.Remove([]string{hostsKey, hostname, oauthTokenKey})
+		} else {
+			return false, fmt.Errorf("failed to store token in keyring: %w", setErr)
 		}
 	}
 	insecureStorageUsed := false
@@ -504,15 +501,31 @@ func (c *AuthConfig) TokenForUser(hostname, user string) (string, string, error)
 		return token, "keyring", nil
 	}
 
-	if token, err := c.cfg.Get([]string{hostsKey, hostname, usersKey, user, oauthTokenKey}); err == nil {
-		return token, "oauth_token", nil
-	}
-
 	return "", "default", fmt.Errorf("no token found for '%s'", user)
 }
 
 func keyringServiceName(hostname string) string {
 	return "gh:" + hostname
+}
+
+func tokenFromEnv(hostname string) (string, string) {
+	normalizedHost := ghauth.NormalizeHostname(hostname)
+	if normalizedHost == "github.com" || ghauth.IsTenancy(normalizedHost) || normalizedHost == "github.localhost" {
+		if token := os.Getenv("GH_TOKEN"); token != "" {
+			return token, "GH_TOKEN"
+		}
+		if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+			return token, "GITHUB_TOKEN"
+		}
+	} else {
+		if token := os.Getenv("GH_ENTERPRISE_TOKEN"); token != "" {
+			return token, "GH_ENTERPRISE_TOKEN"
+		}
+		if token := os.Getenv("GITHUB_ENTERPRISE_TOKEN"); token != "" {
+			return token, "GITHUB_ENTERPRISE_TOKEN"
+		}
+	}
+	return "", ""
 }
 
 type AliasConfig struct {
