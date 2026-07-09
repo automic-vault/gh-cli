@@ -1,0 +1,26 @@
+name:
+  isotope:gh
+
+replaces:
+  brew:gh
+
+build: |
+  make
+  codesign --force --options runtime --timestamp \
+    --sign "$CODESIGN_IDENTITY" \
+    bin/gh
+  tar czf out.tgz bin
+
+justification:
+  title:
+    Trivially Accessible Secrets
+  detail: |
+    `gh` stores its secrets in the Keychain but they can be trivially
+    obtained:
+
+    1. `gh auth token`
+    2. `security find-generic-password -s 'gh:github.com' -w`
+
+    Our isotope routes `gh` token reads through the Automic Vault XPC helper,
+    which can show token request metadata to the human and release credentials
+    only when the request is approved.
