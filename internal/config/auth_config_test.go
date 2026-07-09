@@ -56,7 +56,7 @@ func TestTokenFromKeyringForUserErrorsIfUsernameIsBlank(t *testing.T) {
 func TestHasActiveToken(t *testing.T) {
 	// Given the user has logged in for a host
 	authCfg := newTestAuthConfig(t)
-	_, err := authCfg.Login("github.com", "test-user", "test-token", "", false)
+	_, err := authCfg.Login("github.com", "test-user", "test-token", "", true)
 	require.NoError(t, err)
 
 	// When we check if that host has an active token
@@ -77,7 +77,7 @@ func TestHasNoActiveToken(t *testing.T) {
 	require.False(t, hasActiveToken, "expected there to be no active token")
 }
 
-func TestTokenStoredInConfig(t *testing.T) {
+func TestTokenStoredInConfigIsNotActive(t *testing.T) {
 	// Given the user has logged in insecurely
 	authCfg := newTestAuthConfig(t)
 	_, err := authCfg.Login("github.com", "test-user", "test-token", "", false)
@@ -86,11 +86,9 @@ func TestTokenStoredInConfig(t *testing.T) {
 	// When we get the token
 	token, source := authCfg.ActiveToken("github.com")
 
-	// Then the token is successfully fetched
-	// and the source is set to oauth_token but this isn't great:
-	// https://github.com/cli/go-gh/issues/94
-	require.Equal(t, "test-token", token)
-	require.Equal(t, oauthTokenKey, source)
+	// Then the config token is ignored by runtime token resolution.
+	require.Empty(t, token)
+	require.Empty(t, source)
 }
 
 func TestTokenStoredInEnv(t *testing.T) {
@@ -272,7 +270,7 @@ func TestLoginSecureStorageRemovesOldInsecureConfigToken(t *testing.T) {
 	requireNoKey(t, authCfg.cfg, []string{hostsKey, "github.com", oauthTokenKey})
 }
 
-func TestLoginSecureStorageWithErrorFallsbackAndReports(t *testing.T) {
+func TestLoginSecureStorageWithErrorFailsClosed(t *testing.T) {
 	// Given a keyring that errors
 	authCfg := newTestAuthConfig(t)
 	keyring.MockInitWithError(errors.New("test-explosion"))
@@ -280,11 +278,11 @@ func TestLoginSecureStorageWithErrorFallsbackAndReports(t *testing.T) {
 	// When we login with secure storage
 	insecureStorageUsed, err := authCfg.Login("github.com", "test-user", "test-token", "", true)
 
-	// Then it returns success, reports that insecure storage was used, and stores the token in the config
-	require.NoError(t, err)
-
-	require.True(t, insecureStorageUsed, "expected to use insecure storage")
-	requireKeyWithValue(t, authCfg.cfg, []string{hostsKey, "github.com", oauthTokenKey}, "test-token")
+	// Then it returns the keyring error and does not write a plaintext fallback.
+	require.ErrorContains(t, err, "failed to store token in keyring: test-explosion")
+	require.False(t, insecureStorageUsed, "expected secure storage failure to fail closed")
+	requireNoKey(t, authCfg.cfg, []string{hostsKey, "github.com", oauthTokenKey})
+	requireNoKey(t, authCfg.cfg, []string{hostsKey, "github.com", usersKey, "test-user", oauthTokenKey})
 }
 
 func TestLoginInsecureStorage(t *testing.T) {
@@ -467,7 +465,7 @@ func TestSwitchUserMakesSecureTokenActive(t *testing.T) {
 	require.Equal(t, "test-token-1", token)
 }
 
-func TestSwitchUserMakesInsecureTokenActive(t *testing.T) {
+func TestSwitchUserDoesNotUseInsecureToken(t *testing.T) {
 	// Given we have a user with an insecure token
 	authCfg := newTestAuthConfig(t)
 	_, err := authCfg.Login("github.com", "test-user-1", "test-token-1", "ssh", false)
@@ -476,20 +474,21 @@ func TestSwitchUserMakesInsecureTokenActive(t *testing.T) {
 	require.NoError(t, err)
 
 	// When we switch to that user
-	require.NoError(t, authCfg.SwitchUser("github.com", "test-user-1"))
+	err = authCfg.SwitchUser("github.com", "test-user-1")
 
-	// Their insecure token is now active
+	// Then plaintext config tokens are not accepted as active credentials.
+	require.ErrorContains(t, err, "currently active token for github.com is from")
 	token, source := authCfg.ActiveToken("github.com")
-	require.Equal(t, "test-token-1", token)
-	require.Equal(t, oauthTokenKey, source)
+	require.Empty(t, token)
+	require.Empty(t, source)
 }
 
 func TestSwitchUserUpdatesTheActiveUser(t *testing.T) {
 	// Given we have two users logged into a host
 	authCfg := newTestAuthConfig(t)
-	_, err := authCfg.Login("github.com", "test-user-1", "test-token-1", "ssh", false)
+	_, err := authCfg.Login("github.com", "test-user-1", "test-token-1", "ssh", true)
 	require.NoError(t, err)
-	_, err = authCfg.Login("github.com", "test-user-2", "test-token-2", "ssh", false)
+	_, err = authCfg.Login("github.com", "test-user-2", "test-token-2", "ssh", true)
 	require.NoError(t, err)
 
 	// When we switch to the other user
@@ -522,7 +521,7 @@ func TestSwitchUserErrorsAndRestoresUserAndInsecureConfigUnderFailure(t *testing
 	authCfg := newTestAuthConfig(t)
 	_, err := authCfg.Login("github.com", "test-user-1", "test-token-1", "ssh", true)
 	require.NoError(t, err)
-	_, err = authCfg.Login("github.com", "test-user-2", "test-token-2", "ssh", false)
+	_, err = authCfg.Login("github.com", "test-user-2", "test-token-2", "ssh", true)
 	require.NoError(t, err)
 
 	require.NoError(t, keyring.Delete(keyringServiceName("github.com"), "test-user-1"))
@@ -540,7 +539,7 @@ func TestSwitchUserErrorsAndRestoresUserAndInsecureConfigUnderFailure(t *testing
 
 	token, source := authCfg.ActiveToken("github.com")
 	require.Equal(t, "test-token-2", token)
-	require.Equal(t, "oauth_token", source)
+	require.Equal(t, "keyring", source)
 }
 
 func TestSwitchUserErrorsAndRestoresUserAndKeyringUnderFailure(t *testing.T) {
@@ -585,7 +584,7 @@ func TestSwitchClearsActiveSecureTokenWhenSwitchingToInsecureUser(t *testing.T) 
 	require.Error(t, err)
 }
 
-func TestSwitchClearsActiveInsecureTokenWhenSwitchingToSecureUser(t *testing.T) {
+func TestSwitchDoesNotUseActiveInsecureTokenWhenSwitchingToSecureUser(t *testing.T) {
 	// Given we have an active insecure token
 	authCfg := newTestAuthConfig(t)
 	_, err := authCfg.Login("github.com", "test-user-1", "test-token-1", "ssh", true)
@@ -594,10 +593,10 @@ func TestSwitchClearsActiveInsecureTokenWhenSwitchingToSecureUser(t *testing.T) 
 	require.NoError(t, err)
 
 	// When we switch to a secure user
-	require.NoError(t, authCfg.SwitchUser("github.com", "test-user-1"))
+	err = authCfg.SwitchUser("github.com", "test-user-1")
 
-	// Then the active insecure token is cleared
-	requireNoKey(t, authCfg.cfg, []string{hostsKey, "github.com", oauthTokenKey})
+	// Then the insecure active token is not considered usable.
+	require.ErrorContains(t, err, "currently active token for github.com is from")
 }
 
 func TestUsersForHostNoHost(t *testing.T) {
@@ -641,7 +640,7 @@ func TestTokenForUserSecureLogin(t *testing.T) {
 	require.Equal(t, "keyring", source)
 }
 
-func TestTokenForUserInsecureLogin(t *testing.T) {
+func TestTokenForUserInsecureLoginIsNotReturned(t *testing.T) {
 	// Given a user has logged in insecurely
 	authCfg := newTestAuthConfig(t)
 	_, err := authCfg.Login("github.com", "test-user-1", "test-token", "ssh", false)
@@ -650,10 +649,10 @@ func TestTokenForUserInsecureLogin(t *testing.T) {
 	// When we get the token
 	token, source, err := authCfg.TokenForUser("github.com", "test-user-1")
 
-	// Then it returns the token and the source as oauth_token
-	require.NoError(t, err)
-	require.Equal(t, "test-token", token)
-	require.Equal(t, "oauth_token", source)
+	// Then plaintext config tokens are ignored.
+	require.EqualError(t, err, "no token found for 'test-user-1'")
+	require.Empty(t, token)
+	require.Equal(t, "default", source)
 }
 
 func TestTokenForUserNotFoundErrors(t *testing.T) {
@@ -764,10 +763,10 @@ func TestTokenWorksRightAfterMigration(t *testing.T) {
 	c := cfg{authCfg.cfg}
 	require.NoError(t, c.Migrate(m))
 
-	// Then we can still get the token correctly
+	// Then the migrated plaintext token is ignored by runtime token resolution.
 	token, source := authCfg.ActiveToken("github.com")
-	require.Equal(t, "test-token", token)
-	require.Equal(t, oauthTokenKey, source)
+	require.Empty(t, token)
+	require.Empty(t, source)
 }
 
 func TestTokenPrioritizesActiveUserToken(t *testing.T) {
