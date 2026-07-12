@@ -42,7 +42,7 @@ func format(version, buildDate string, debugBuild bool) string {
 		debugStr = " [debug build]"
 	}
 
-	return fmt.Sprintf("gh version %s%s%s\n%s\n", version, dateStr, debugStr, changelogURL(version))
+	return fmt.Sprintf("gh version %s%s%s (Automic Vault Isotope)\n%s\n", version, dateStr, debugStr, changelogURL(version))
 }
 
 func changelogURL(version string) string {
