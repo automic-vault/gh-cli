@@ -5,7 +5,7 @@ import (
 )
 
 func TestFormat(t *testing.T) {
-	expects := "gh version 1.4.0 (2020-12-15)\nhttps://github.com/cli/cli/releases/tag/v1.4.0\n"
+	expects := "gh version 1.4.0 (2020-12-15) (Automic Vault Isotope)\nhttps://github.com/cli/cli/releases/tag/v1.4.0\n"
 	if got := Format("1.4.0", "2020-12-15"); got != expects {
 		t.Errorf("Format() = %q, wants %q", got, expects)
 	}
