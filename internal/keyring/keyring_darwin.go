@@ -7,6 +7,8 @@ package keyring
 #include <xpc/xpc.h>
 #include <stdlib.h>
 
+void av_xpc_connection_set_event_handler(xpc_connection_t connection);
+
 static xpc_type_t av_xpc_type_error(void) {
 	return XPC_TYPE_ERROR;
 }
@@ -15,15 +17,13 @@ static const char *av_xpc_error_description(xpc_object_t object) {
 	return xpc_dictionary_get_string(object, XPC_ERROR_KEY_DESCRIPTION);
 }
 
-static void av_xpc_connection_set_empty_event_handler(xpc_connection_t connection) {
-	xpc_connection_set_event_handler(connection, ^(xpc_object_t event) {});
-}
 */
 import "C"
 
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +31,23 @@ import (
 )
 
 const approvalService = "com.automicvault.av2.approval"
+
+const humanApprovalRequiredEvent = "human-approval-required"
+const humanApprovalRequiredNotice = "automic vault: human approval required\n"
+
+func approvalEventNotice(event string) string {
+	if event == humanApprovalRequiredEvent {
+		return humanApprovalRequiredNotice
+	}
+	return ""
+}
+
+//export av_approval_event
+func av_approval_event(eventName *C.char) {
+	if notice := approvalEventNotice(C.GoString(eventName)); notice != "" {
+		_, _ = io.WriteString(os.Stderr, notice)
+	}
+}
 
 func set(service, user, secret string) error {
 	key := vaultKey(service, user)
@@ -175,7 +192,7 @@ func send(message C.xpc_object_t) (C.xpc_object_t, error) {
 		return nil, errors.New("failed to configure Automic Vault XPC signing requirement")
 	}
 
-	C.av_xpc_connection_set_empty_event_handler(connection)
+	C.av_xpc_connection_set_event_handler(connection)
 	C.xpc_connection_activate(connection)
 
 	reply := C.xpc_connection_send_message_with_reply_sync(connection, message)
