@@ -18,3 +18,8 @@ func TestTokenRequestDetail(t *testing.T) {
 	require.Equal(t, "gh needs the active GitHub token for github.com", tokenRequestDetail("gh:github.com", ""))
 	require.Equal(t, "gh needs the GitHub token for github.com account monalisa", tokenRequestDetail("gh:github.com", "monalisa"))
 }
+
+func TestApprovalEventNotice(t *testing.T) {
+	require.Equal(t, "automic vault: human approval required\n", approvalEventNotice("human-approval-required"))
+	require.Empty(t, approvalEventNotice("other-event"))
+}
