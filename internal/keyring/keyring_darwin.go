@@ -57,7 +57,7 @@ func set(service, user, secret string) error {
 	}
 	defer C.xpc_release(message)
 
-	if err := setString(message, "op", "save"); err != nil {
+	if err := setString(message, "op", "gh-save"); err != nil {
 		return err
 	}
 	if err := setString(message, "key", key); err != nil {
@@ -120,7 +120,7 @@ func deleteSecret(service, user string) error {
 	}
 	defer C.xpc_release(message)
 
-	if err := setString(message, "op", "delete"); err != nil {
+	if err := setString(message, "op", "gh-delete"); err != nil {
 		return err
 	}
 	if err := setString(message, "key", key); err != nil {
