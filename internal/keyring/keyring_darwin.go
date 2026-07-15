@@ -31,6 +31,7 @@ import (
 )
 
 const approvalService = "com.automicvault.av2.approval"
+const approvalServiceSigningRequirement = `anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier "com.automicvault"`
 
 const humanApprovalRequiredEvent = "human-approval-required"
 const humanApprovalRequiredNotice = "automic vault: human approval required\n"
@@ -186,7 +187,7 @@ func send(message C.xpc_object_t) (C.xpc_object_t, error) {
 	defer C.xpc_release(C.xpc_object_t(unsafe.Pointer(connection)))
 	defer C.xpc_connection_cancel(connection)
 
-	requirement := C.CString(`identifier "com.automicvault.menubar-helper"`)
+	requirement := C.CString(approvalServiceSigningRequirement)
 	defer C.free(unsafe.Pointer(requirement))
 	if C.xpc_connection_set_peer_code_signing_requirement(connection, requirement) != 0 {
 		return nil, errors.New("failed to configure Automic Vault XPC signing requirement")
