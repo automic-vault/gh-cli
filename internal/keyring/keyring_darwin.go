@@ -43,6 +43,17 @@ func approvalEventNotice(event string) string {
 	return ""
 }
 
+func approvalDecisionNotice(decision string) string {
+	switch decision {
+	case "approved":
+		return "automic vault: approved\n"
+	case "denied":
+		return "automic vault: denied\n"
+	default:
+		return ""
+	}
+}
+
 //export av_approval_event
 func av_approval_event(eventName *C.char) {
 	if notice := approvalEventNotice(C.GoString(eventName)); notice != "" {
@@ -211,6 +222,11 @@ func send(message C.xpc_object_t) (C.xpc_object_t, error) {
 			return nil, errors.New("Automic Vault approval service is not running; open the menu bar app")
 		}
 		return nil, errors.New(err)
+	}
+	decisionKey := C.CString("human_approval_decision")
+	defer C.free(unsafe.Pointer(decisionKey))
+	if decision := C.xpc_dictionary_get_string(reply, decisionKey); decision != nil {
+		_, _ = io.WriteString(os.Stderr, approvalDecisionNotice(C.GoString(decision)))
 	}
 	return reply, nil
 }
