@@ -29,3 +29,9 @@ func TestApprovalEventNotice(t *testing.T) {
 	require.Equal(t, "automic vault: human approval required\n", approvalEventNotice("human-approval-required"))
 	require.Empty(t, approvalEventNotice("other-event"))
 }
+
+func TestApprovalDecisionNotice(t *testing.T) {
+	require.Equal(t, "automic vault: approved\n", approvalDecisionNotice("approved"))
+	require.Equal(t, "automic vault: denied\n", approvalDecisionNotice("denied"))
+	require.Empty(t, approvalDecisionNotice("other-decision"))
+}
