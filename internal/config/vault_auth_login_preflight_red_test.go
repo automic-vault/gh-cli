@@ -15,10 +15,12 @@ import (
 )
 
 var (
-	errSyntheticLoginPreflightAccountReadDenied = errors.New("synthetic Vault login account read denied")
-	errSyntheticLoginPreflightActiveReadDenied  = errors.New("synthetic Vault login active-slot read denied")
-	errSyntheticLoginPreflightActiveSetDenied   = errors.New("synthetic Vault login active-slot write denied")
-	errSyntheticLoginPreflightConfigWrite       = errors.New("synthetic local login config write denied")
+	errSyntheticLoginPreflightAccountReadDenied     = errors.New("synthetic Vault login account read denied")
+	errSyntheticLoginPreflightActiveReadDenied      = errors.New("synthetic Vault login active-slot read denied")
+	errSyntheticLoginPreflightActiveSetDenied       = errors.New("synthetic Vault login active-slot write denied")
+	errSyntheticLoginPreflightActiveDeleteDenied    = errors.New("synthetic Vault login active-slot delete denied")
+	errSyntheticLoginPreflightAccountRollbackDenied = errors.New("synthetic Vault login account rollback denied")
+	errSyntheticLoginPreflightConfigWrite           = errors.New("synthetic local login config write denied")
 )
 
 type loginPreflightOperation struct {
@@ -202,18 +204,12 @@ func (f *loginPreflightFixture) assertPreflightPrefix(t *testing.T, message stri
 	assert.Equal(t, want, f.provider.operations[:len(want)], message)
 }
 
-func (f *loginPreflightFixture) assertNoProviderReadAfterSets(t *testing.T, message string) {
+func (f *loginPreflightFixture) assertNoProviderReadAfterPreflightGets(t *testing.T, message string) {
 	t.Helper()
-	lastSet := -1
-	for i, op := range f.provider.operations {
-		if op.kind == "set" {
-			lastSet = i
-		}
-	}
-	if lastSet < 0 {
+	if len(f.provider.operations) < 2 {
 		return
 	}
-	for _, op := range f.provider.operations[lastSet+1:] {
+	for _, op := range f.provider.operations[2:] {
 		assert.NotEqual(t, "get", op.kind, message)
 	}
 }
@@ -271,7 +267,13 @@ func TestLoginSecureStoragePreflightReadsOldSlotsBeforeWrites(t *testing.T) {
 
 	require.NoError(t, err)
 	f.assertPreflightPrefix(t, "login did not preflight old account and active credentials before writing")
-	f.assertNoProviderReadAfterSets(t, "login reread provider state after beginning writes")
+	assert.Equal(t, []loginPreflightOperation{
+		{kind: "get", user: f.account},
+		{kind: "get", user: ""},
+		{kind: "set", user: f.account, token: f.newToken},
+		{kind: "set", user: "", token: f.newToken},
+	}, f.provider.operations, "successful login performed an unexpected provider operation")
+	f.assertNoProviderReadAfterPreflightGets(t, "login reread provider state after beginning writes")
 	assert.Equal(t, f.newToken, f.provider.values[loginProviderKey(keyringServiceName(f.hostname), f.account)])
 	assert.Equal(t, f.newToken, f.provider.values[loginProviderKey(keyringServiceName(f.hostname), "")])
 }
@@ -287,8 +289,14 @@ func TestLoginSecureStorageExistingAccountActiveWriteFailureRestoresOldAccount(t
 
 	_, err := f.authCfg.Login(f.hostname, f.account, f.newToken, "", true)
 
-	f.assertPreflightPrefix(t, "active-slot failure did not use the required preflight sequence")
-	assert.Contains(t, f.provider.operations, loginPreflightOperation{kind: "set", user: f.account, token: f.oldAccount}, "active-slot failure did not restore the overwritten account credential")
+	assert.Equal(t, []loginPreflightOperation{
+		{kind: "get", user: f.account},
+		{kind: "get", user: ""},
+		{kind: "set", user: f.account, token: f.newToken},
+		{kind: "set", user: "", token: f.newToken},
+		{kind: "set", user: f.account, token: f.oldAccount},
+	}, f.provider.operations, "active-slot failure used an unexpected provider transaction")
+	f.assertNoProviderReadAfterPreflightGets(t, "active-slot failure reread provider state after beginning writes")
 	assert.Equal(t, f.oldAccount, f.provider.values[loginProviderKey(keyringServiceName(f.hostname), f.account)], "active-slot failure did not restore the exact old account credential")
 	f.assertProviderUnchanged(t, "active-slot failure did not restore the complete provider map")
 	f.assertConfigUnchanged(t, "active-slot failure changed authentication state")
@@ -304,8 +312,15 @@ func TestLoginSecureStorageExistingAccountConfigFailureRestoresAllProviderState(
 
 	_, err := f.authCfg.Login(f.hostname, f.account, f.newToken, "", true)
 
-	f.assertPreflightPrefix(t, "config failure did not preflight old credentials")
-	f.assertNoProviderReadAfterSets(t, "config failure performed a provider reread after mutation")
+	assert.Equal(t, []loginPreflightOperation{
+		{kind: "get", user: f.account},
+		{kind: "get", user: ""},
+		{kind: "set", user: f.account, token: f.newToken},
+		{kind: "set", user: "", token: f.newToken},
+		{kind: "set", user: f.account, token: f.oldAccount},
+		{kind: "set", user: "", token: f.oldActive},
+	}, f.provider.operations, "config failure used an unexpected provider transaction")
+	f.assertNoProviderReadAfterPreflightGets(t, "config failure performed a provider reread after mutation")
 	assert.Equal(t, f.beforeValues, maps.Clone(f.provider.values), "config failure did not restore the complete provider map")
 	f.assertConfigUnchanged(t, "config failure did not restore the complete multi-host config")
 	f.assertErrorSecretFree(t, err)
@@ -322,12 +337,57 @@ func TestLoginSecureStorageAbsentActiveSlotConfigFailureDeletesCreatedSlot(t *te
 
 	_, err := f.authCfg.Login(f.hostname, f.account, f.newToken, "", true)
 
-	f.assertPreflightPrefix(t, "absent active slot did not preflight before writing")
-	assert.Contains(t, f.provider.operations, loginPreflightOperation{kind: "delete", user: ""}, "config failure did not delete the newly created active slot")
+	assert.Equal(t, []loginPreflightOperation{
+		{kind: "get", user: f.account},
+		{kind: "get", user: ""},
+		{kind: "set", user: f.account, token: f.newToken},
+		{kind: "set", user: "", token: f.newToken},
+		{kind: "set", user: f.account, token: f.oldAccount},
+		{kind: "delete", user: ""},
+	}, f.provider.operations, "absent active slot config failure used an unexpected provider transaction")
+	f.assertNoProviderReadAfterPreflightGets(t, "absent active slot config failure reread provider state after mutation")
 	assert.Equal(t, f.beforeValues, maps.Clone(f.provider.values), "config failure did not restore the provider map when active slot was originally absent")
 	f.assertConfigUnchanged(t, "config failure did not restore config when active slot was originally absent")
 	f.assertErrorSecretFree(t, err)
 	require.Same(t, errSyntheticLoginPreflightConfigWrite, err)
 	var resolutionErr *AutomicVaultCredentialResolutionError
 	assert.False(t, errors.As(err, &resolutionErr), "a local config write failure was mislabeled as a Vault failure")
+}
+
+func TestLoginSecureStorageAbsentActiveSlotRollbackFailuresAreClassifiedOnce(t *testing.T) {
+	f := newLoginPreflightFixture(t, false)
+	f.authCfg.configWrite = func() error {
+		return errSyntheticLoginPreflightConfigWrite
+	}
+	f.provider.setHook = func(op loginPreflightOperation) error {
+		if op.user == f.account && op.token == f.oldAccount {
+			return errSyntheticLoginPreflightAccountRollbackDenied
+		}
+		return nil
+	}
+	f.provider.deleteHook = func(op loginPreflightOperation) error {
+		if op.user == "" {
+			return errSyntheticLoginPreflightActiveDeleteDenied
+		}
+		return nil
+	}
+
+	_, err := f.authCfg.Login(f.hostname, f.account, f.newToken, "", true)
+
+	assert.Equal(t, []loginPreflightOperation{
+		{kind: "get", user: f.account},
+		{kind: "get", user: ""},
+		{kind: "set", user: f.account, token: f.newToken},
+		{kind: "set", user: "", token: f.newToken},
+		{kind: "set", user: f.account, token: f.oldAccount},
+		{kind: "delete", user: ""},
+	}, f.provider.operations, "rollback failures did not attempt each mutated provider slot exactly once")
+	f.assertNoProviderReadAfterPreflightGets(t, "rollback failures reread provider state")
+	f.assertConfigUnchanged(t, "rollback failures changed authentication config")
+	f.assertErrorSecretFree(t, err)
+	requireAutomicVaultCredentialErrors(t, err,
+		errSyntheticLoginPreflightConfigWrite,
+		errSyntheticLoginPreflightAccountRollbackDenied,
+		errSyntheticLoginPreflightActiveDeleteDenied,
+	)
 }
