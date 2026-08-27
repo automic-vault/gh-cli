@@ -133,7 +133,7 @@ func Test_statusRun(t *testing.T) {
 			wantErr: cmdutil.SilentError,
 			wantErrOut: heredoc.Doc(`
 				github.com
-				  X Timeout trying to log in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  X Timeout trying to log in to github.com account monalisa (keyring)
 				  - Active account: true
 			`),
 		},
@@ -152,7 +152,7 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				ghe.io
-				  ✓ Logged in to ghe.io account monalisa-ghe (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to ghe.io account monalisa-ghe (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_******
@@ -171,7 +171,7 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				ghe.io
-				  ✓ Logged in to ghe.io account monalisa-ghe (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to ghe.io account monalisa-ghe (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_******
@@ -193,9 +193,9 @@ func Test_statusRun(t *testing.T) {
 			wantErr: cmdutil.SilentError,
 			wantErrOut: heredoc.Doc(`
 				ghe.io
-				  X Failed to log in to ghe.io account monalisa-ghe (GH_CONFIG_DIR/hosts.yml)
+				  X Failed to log in to ghe.io account monalisa-ghe (keyring)
 				  - Active account: true
-				  - The token in GH_CONFIG_DIR/hosts.yml is invalid.
+				  - The token in keyring is invalid.
 				  - To re-authenticate, run: gh auth refresh -h ghe.io
 				  - To forget about this account, run: gh auth logout -h ghe.io -u monalisa-ghe
 			`),
@@ -215,7 +215,7 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				ghe.io
-				  ✓ Logged in to ghe.io account monalisa-ghe (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to ghe.io account monalisa-ghe (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_******
@@ -238,9 +238,9 @@ func Test_statusRun(t *testing.T) {
 			wantErr: cmdutil.SilentError,
 			wantErrOut: heredoc.Doc(`
 				ghe.io
-				  X Failed to log in to ghe.io account monalisa-ghe (GH_CONFIG_DIR/hosts.yml)
+				  X Failed to log in to ghe.io account monalisa-ghe (keyring)
 				  - Active account: true
-				  - The token in GH_CONFIG_DIR/hosts.yml is invalid.
+				  - The token in keyring is invalid.
 				  - To re-authenticate, run: gh auth refresh -h ghe.io
 				  - To forget about this account, run: gh auth logout -h ghe.io -u monalisa-ghe
 			`),
@@ -264,14 +264,14 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_******
 				  - Token scopes: 'repo', 'read:org'
 
 				ghe.io
-				  ✓ Logged in to ghe.io account monalisa-ghe (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to ghe.io account monalisa-ghe (keyring)
 				  - Active account: true
 				  - Git operations protocol: ssh
 				  - Token: gho_******
@@ -430,7 +430,7 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: ghs_******
@@ -450,7 +450,7 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: github_pat_**********
@@ -473,14 +473,14 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_abc123
 				  - Token scopes: 'repo', 'read:org'
 
 				ghe.io
-				  ✓ Logged in to ghe.io account monalisa-ghe (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to ghe.io account monalisa-ghe (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_xyz456
@@ -512,13 +512,13 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa-2 (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa-2 (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_******
 				  - Token scopes: 'repo', 'read:org'
 
-				  ✓ Logged in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa (keyring)
 				  - Active account: false
 				  - Git operations protocol: https
 				  - Token: gho_******
@@ -551,13 +551,13 @@ func Test_statusRun(t *testing.T) {
 			wantErr: cmdutil.SilentError,
 			wantErrOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa-2 (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa-2 (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_******
 				  - Token scopes: 'repo', 'read:org'
 
-				  ✓ Logged in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa (keyring)
 				  - Active account: false
 				  - Git operations protocol: https
 				  - Token: gho_******
@@ -572,9 +572,9 @@ func Test_statusRun(t *testing.T) {
 				  - Token: gho_******
 				  - Token scopes: 'repo', 'read:org'
 
-				  X Failed to log in to ghe.io account monalisa-ghe (GH_CONFIG_DIR/hosts.yml)
+				  X Failed to log in to ghe.io account monalisa-ghe (keyring)
 				  - Active account: false
-				  - The token in GH_CONFIG_DIR/hosts.yml is invalid.
+				  - The token in keyring is invalid.
 				  - To re-authenticate, run: gh auth refresh -h ghe.io
 				  - To forget about this account, run: gh auth logout -h ghe.io -u monalisa-ghe
 			`),
@@ -593,7 +593,7 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa-2 (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa-2 (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_******
@@ -619,14 +619,14 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa-2 (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa-2 (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_******
 				  - Token scopes: 'repo', 'read:org'
 
 				ghe.io
-				  ✓ Logged in to ghe.io account monalisa-ghe-2 (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to ghe.io account monalisa-ghe-2 (keyring)
 				  - Active account: true
 				  - Git operations protocol: ssh
 				  - Token: gho_******
@@ -653,16 +653,16 @@ func Test_statusRun(t *testing.T) {
 			wantErr: cmdutil.SilentError,
 			wantErrOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa-2 (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa-2 (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_******
 				  - Token scopes: 'repo', 'read:org'
 
 				ghe.io
-				  X Failed to log in to ghe.io account monalisa-ghe-2 (GH_CONFIG_DIR/hosts.yml)
+				  X Failed to log in to ghe.io account monalisa-ghe-2 (keyring)
 				  - Active account: true
-				  - The token in GH_CONFIG_DIR/hosts.yml is invalid.
+				  - The token in keyring is invalid.
 				  - To re-authenticate, run: gh auth refresh -h ghe.io
 				  - To forget about this account, run: gh auth logout -h ghe.io -u monalisa-ghe-2
 			`),
@@ -711,7 +711,7 @@ func Test_statusRun(t *testing.T) {
 					httpmock.REST("GET", "api/v3/"),
 					httpmock.WithHeader(httpmock.ScopesResponder("repo,read:org"), "X-Oauth-Scopes", "repo, read:org"))
 			},
-			wantOut: `{"hosts":{"ghe.io":[{"state":"success","active":true,"host":"ghe.io","login":"monalisa-ghe","tokenSource":"GH_CONFIG_DIR/hosts.yml","scopes":"repo, read:org","gitProtocol":"https"}],"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa2","tokenSource":"GH_CONFIG_DIR/hosts.yml","scopes":"repo, read:org","gitProtocol":"https"},{"state":"success","active":false,"host":"github.com","login":"monalisa","tokenSource":"GH_CONFIG_DIR/hosts.yml","scopes":"repo, read:org","gitProtocol":"https"}]}}` + "\n",
+			wantOut: `{"hosts":{"ghe.io":[{"state":"success","active":true,"host":"ghe.io","login":"monalisa-ghe","tokenSource":"keyring","scopes":"repo, read:org","gitProtocol":"https"}],"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa2","tokenSource":"keyring","scopes":"repo, read:org","gitProtocol":"https"},{"state":"success","active":false,"host":"github.com","login":"monalisa","tokenSource":"keyring","scopes":"repo, read:org","gitProtocol":"https"}]}}` + "\n",
 		},
 		{
 			name:       "json, refreshable token",
@@ -771,7 +771,7 @@ func Test_statusRun(t *testing.T) {
 					httpmock.REST("GET", ""),
 					httpmock.WithHeader(httpmock.ScopesResponder("repo,read:org"), "X-Oauth-Scopes", "repo, read:org"))
 			},
-			wantOut: `{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa2","tokenSource":"GH_CONFIG_DIR/hosts.yml","scopes":"repo, read:org","gitProtocol":"https"},{"state":"success","active":false,"host":"github.com","login":"monalisa","tokenSource":"GH_CONFIG_DIR/hosts.yml","scopes":"repo, read:org","gitProtocol":"https"}]}}` + "\n",
+			wantOut: `{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa2","tokenSource":"keyring","scopes":"repo, read:org","gitProtocol":"https"},{"state":"success","active":false,"host":"github.com","login":"monalisa","tokenSource":"keyring","scopes":"repo, read:org","gitProtocol":"https"}]}}` + "\n",
 		},
 		{
 			name: "json, all valid tokens with active",
@@ -793,7 +793,7 @@ func Test_statusRun(t *testing.T) {
 					httpmock.REST("GET", "api/v3/"),
 					httpmock.WithHeader(httpmock.ScopesResponder("repo,read:org"), "X-Oauth-Scopes", "repo, read:org"))
 			},
-			wantOut: `{"hosts":{"ghe.io":[{"state":"success","active":true,"host":"ghe.io","login":"monalisa-ghe","tokenSource":"GH_CONFIG_DIR/hosts.yml","scopes":"repo, read:org","gitProtocol":"https"}],"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa2","tokenSource":"GH_CONFIG_DIR/hosts.yml","scopes":"repo, read:org","gitProtocol":"https"}]}}` + "\n",
+			wantOut: `{"hosts":{"ghe.io":[{"state":"success","active":true,"host":"ghe.io","login":"monalisa-ghe","tokenSource":"keyring","scopes":"repo, read:org","gitProtocol":"https"}],"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa2","tokenSource":"keyring","scopes":"repo, read:org","gitProtocol":"https"}]}}` + "\n",
 		},
 		{
 			name:       "json, token from env",
@@ -821,7 +821,7 @@ func Test_statusRun(t *testing.T) {
 				// mock for HeaderHasMinimumScopes api requests to a non-github.com host
 				reg.Register(httpmock.REST("GET", "api/v3/"), httpmock.StatusStringResponse(400, "no bueno"))
 			},
-			wantOut: `{"hosts":{"ghe.io":[{"state":"error","error":"HTTP 400 (https://ghe.io/api/v3/)","active":true,"host":"ghe.io","login":"monalisa-ghe","tokenSource":"GH_CONFIG_DIR/hosts.yml","gitProtocol":"https"}]}}` + "\n",
+			wantOut: `{"hosts":{"ghe.io":[{"state":"error","error":"HTTP 400 (https://ghe.io/api/v3/)","active":true,"host":"ghe.io","login":"monalisa-ghe","tokenSource":"keyring","gitProtocol":"https"}]}}` + "\n",
 			wantErr: nil, // should not return error in machine-readable mode
 		},
 		{
@@ -853,7 +853,7 @@ func Test_statusRun(t *testing.T) {
 					return nil, context.DeadlineExceeded
 				})
 			},
-			wantOut: `{"hosts":{"github.com":[{"state":"timeout","error":"Get \"https://api.github.com/\": context deadline exceeded","active":true,"host":"github.com","login":"monalisa","tokenSource":"GH_CONFIG_DIR/hosts.yml","gitProtocol":"https"}]}}` + "\n",
+			wantOut: `{"hosts":{"github.com":[{"state":"timeout","error":"Get \"https://api.github.com/\": context deadline exceeded","active":true,"host":"github.com","login":"monalisa","tokenSource":"keyring","gitProtocol":"https"}]}}` + "\n",
 			wantErr: nil, // should not return error in machine-readable mode
 		},
 		{
@@ -890,7 +890,7 @@ func Test_statusRun(t *testing.T) {
 					httpmock.REST("GET", ""),
 					httpmock.WithHeader(httpmock.ScopesResponder("repo,read:org"), "X-Oauth-Scopes", "repo, read:org"))
 			},
-			wantOut: `{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa","tokenSource":"GH_CONFIG_DIR/hosts.yml","token":"abc123","scopes":"repo, read:org","gitProtocol":"https"}]}}` + "\n",
+			wantOut: `{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa","tokenSource":"keyring","token":"abc123","scopes":"repo, read:org","gitProtocol":"https"}]}}` + "\n",
 		},
 	}
 
@@ -951,7 +951,7 @@ func Test_statusRun(t *testing.T) {
 
 func login(t *testing.T, c gh.Config, hostname, username, token, protocol string) {
 	t.Helper()
-	_, err := c.Authentication().Login(hostname, username, token, protocol, false)
+	_, err := c.Authentication().Login(hostname, username, token, protocol, true)
 	require.NoError(t, err)
 }
 
