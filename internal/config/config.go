@@ -229,6 +229,7 @@ type AuthConfig struct {
 	defaultHostOverride func() (string, string)
 	hostsOverride       func() []string
 	tokenOverride       func(string) (string, string)
+	keyringDelete       func(string, string) error
 }
 
 // AutomicVaultCredentialResolutionError reports an operational failure while
@@ -375,6 +376,13 @@ func (c *AuthConfig) TokenFromKeyringForUser(hostname, username string) (string,
 	return keyring.Get(keyringServiceName(hostname), username)
 }
 
+func (c *AuthConfig) deleteKeyring(service, user string) error {
+	if c.keyringDelete != nil {
+		return c.keyringDelete(service, user)
+	}
+	return keyring.Delete(service, user)
+}
+
 // ActiveUser will retrieve the username for the active user at the given hostname.
 // This will not be accurate if the oauth token is set from an environment variable.
 func (c *AuthConfig) ActiveUser(hostname string) (string, error) {
@@ -496,8 +504,8 @@ func (c *AuthConfig) Logout(hostname, username string) error {
 	// and unset the keyring tokens.
 	if len(users) < 2 {
 		_ = c.cfg.Remove([]string{hostsKey, hostname})
-		_ = keyring.Delete(keyringServiceName(hostname), "")
-		_ = keyring.Delete(keyringServiceName(hostname), username)
+		_ = c.deleteKeyring(keyringServiceName(hostname), "")
+		_ = c.deleteKeyring(keyringServiceName(hostname), username)
 		return ghConfig.Write(c.cfg)
 	}
 
@@ -523,7 +531,7 @@ func (c *AuthConfig) Logout(hostname, username string) error {
 
 func (c *AuthConfig) activateUser(hostname, user string) error {
 	// We first need to idempotently clear out any set tokens for the host
-	_ = keyring.Delete(keyringServiceName(hostname), "")
+	_ = c.deleteKeyring(keyringServiceName(hostname), "")
 	_ = c.cfg.Remove([]string{hostsKey, hostname, oauthTokenKey})
 
 	// Then we'll move the keyring token or insecure token as necessary, only one of the
