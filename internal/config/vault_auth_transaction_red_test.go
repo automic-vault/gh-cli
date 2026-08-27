@@ -714,8 +714,8 @@ func TestLogoutActiveUserConfigWriteFailureRestoresTwoUserProviderAndConfig(t *t
 
 	err := f.authCfg.Logout(f.hostname, f.activeUser)
 
-	assert.Equal(t, []string{"", f.activeUser}, setUsers, "active two-user rollback did not restore active and departing slots")
-	assert.True(t, len(setSecrets) == 2 && setSecrets[0] == f.targetToken && setSecrets[1] == f.activeToken, "active two-user rollback used unexpected provider credentials")
+	assert.Equal(t, []string{"", "", f.activeUser}, setUsers, "active two-user rollback did not restore active and departing slots")
+	assert.True(t, len(setSecrets) == 3 && setSecrets[0] == f.targetToken && setSecrets[1] == f.activeToken && setSecrets[2] == f.activeToken, "active two-user rollback used unexpected provider credentials")
 	assertSyntheticStringSlice(t, []string{f.activeUser}, deletes, "active two-user delete sequence changed")
 	f.assertUnchanged(t)
 	f.authCfg.keyringGet = nil

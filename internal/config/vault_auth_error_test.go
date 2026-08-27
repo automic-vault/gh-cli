@@ -419,6 +419,8 @@ func TestLogoutCommitsTwoUserProviderTransactionInOrder(t *testing.T) {
 			operations = append(operations, "get-active")
 		case nextUser:
 			operations = append(operations, "get-next")
+		case activeUser:
+			operations = append(operations, "get-departing")
 		default:
 			operations = append(operations, "get-unexpected")
 		}
@@ -442,7 +444,7 @@ func TestLogoutCommitsTwoUserProviderTransactionInOrder(t *testing.T) {
 
 	err = authCfg.Logout(hostname, activeUser)
 
-	assertSyntheticStringSlice(t, []string{"get-active", "get-next", "set", "delete"}, operations, "provider transaction order changed")
+	assertSyntheticStringSlice(t, []string{"get-active", "get-next", "get-departing", "set", "delete"}, operations, "provider transaction order changed")
 	assert.NoError(t, err)
 	assertSyntheticStringSlice(t, []string{nextUser}, authCfg.UsersForHost(hostname), "departing account was not removed after provider commit")
 	currentUser, currentUserErr := authCfg.ActiveUser(hostname)
@@ -487,6 +489,8 @@ func TestLogoutRollsBackTwoUserProviderAfterDepartingDeleteFails(t *testing.T) {
 			operations = append(operations, "get-active")
 		case nextUser:
 			operations = append(operations, "get-next")
+		case activeUser:
+			operations = append(operations, "get-departing")
 		default:
 			operations = append(operations, "get-unexpected")
 		}
@@ -520,7 +524,7 @@ func TestLogoutRollsBackTwoUserProviderAfterDepartingDeleteFails(t *testing.T) {
 
 	err = authCfg.Logout(hostname, activeUser)
 
-	assertSyntheticStringSlice(t, []string{"get-active", "get-next", "set-next", "delete-departing", "rollback-set"}, operations, "provider rollback order changed")
+	assertSyntheticStringSlice(t, []string{"get-active", "get-next", "get-departing", "set-next", "delete-departing", "rollback-set"}, operations, "provider rollback order changed")
 	assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
 	authCfg.keyringGet = nil
 	authCfg.keyringSet = nil
@@ -560,6 +564,8 @@ func TestLogoutPreservesTwoUserConfigWhenProviderRollbackFails(t *testing.T) {
 			operations = append(operations, "get-active")
 		case nextUser:
 			operations = append(operations, "get-next")
+		case activeUser:
+			operations = append(operations, "get-departing")
 		default:
 			operations = append(operations, "get-unexpected")
 		}
@@ -592,7 +598,7 @@ func TestLogoutPreservesTwoUserConfigWhenProviderRollbackFails(t *testing.T) {
 
 	err = authCfg.Logout(hostname, activeUser)
 
-	assertSyntheticStringSlice(t, []string{"get-active", "get-next", "set-next", "delete-departing", "rollback-set"}, operations, "provider rollback-failure order changed")
+	assertSyntheticStringSlice(t, []string{"get-active", "get-next", "get-departing", "set-next", "delete-departing", "rollback-set"}, operations, "provider rollback-failure order changed")
 	assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
 	assertLogoutErrorSecretFree(t, err, nextUser, activeUser, nextToken, activeToken)
 	requireAutomicVaultCredentialErrors(t, err, errSyntheticLogoutDepartingDeleteDenied, errSyntheticLogoutRollbackDenied)
