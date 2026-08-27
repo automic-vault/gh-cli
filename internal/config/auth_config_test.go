@@ -427,24 +427,18 @@ func TestLogoutOfInactiveUserDoesNotSwitchUser(t *testing.T) {
 	require.Equal(t, "active-user", activeUser)
 }
 
-// Note that I'm not sure this test enforces particularly desirable behaviour
-// since it leads users to believe a token has been removed when really
-// that might have failed for some reason.
-//
-// The original intention here is that if the logout fails, the user can't
-// really do anything to recover. On the other hand, a user might
-// want to rectify this manually, for example if there were on a shared machine.
-func TestLogoutIgnoresErrorsFromConfigAndKeyring(t *testing.T) {
-	// Given we have keyring that errors, and a config that
-	// doesn't even have a hosts key (which would cause Remove to fail)
-	keyring.MockInitWithError(errors.New("test-explosion"))
+func TestLogoutPropagatesProviderErrorFromIsolatedConfig(t *testing.T) {
 	authCfg := newTestAuthConfig(t)
+	authCfg.keyringDelete = func(string, string) error {
+		return errSyntheticLogoutDeleteDenied
+	}
 
-	// When we logout
-	err := authCfg.Logout("github.com", "test-user")
+	err := authCfg.Logout("github.com", "synthetic-account")
 
-	// Then it returns success anyway, suppressing the errors
-	require.NoError(t, err)
+	require.ErrorIs(t, err, errSyntheticLogoutDeleteDenied)
+	var resolutionErr *AutomicVaultCredentialResolutionError
+	require.ErrorAs(t, err, &resolutionErr)
+	require.Equal(t, "Automic Vault credential resolution failed", err.Error())
 }
 
 func TestSwitchUserMakesSecureTokenActive(t *testing.T) {

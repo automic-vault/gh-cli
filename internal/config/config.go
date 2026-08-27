@@ -232,6 +232,7 @@ type AuthConfig struct {
 	keyringGet          func(string, string) (string, error)
 	keyringSet          func(string, string, string) error
 	keyringDelete       func(string, string) error
+	configWrite         func() error
 }
 
 // AutomicVaultCredentialResolutionError reports an operational failure while
@@ -397,6 +398,13 @@ func (c *AuthConfig) deleteKeyring(service, user string) error {
 		return c.keyringDelete(service, user)
 	}
 	return keyring.Delete(service, user)
+}
+
+func (c *AuthConfig) writeConfig() error {
+	if c.configWrite != nil {
+		return c.configWrite()
+	}
+	return ghConfig.Write(c.cfg)
 }
 
 type keyringCredential struct {
@@ -590,7 +598,7 @@ func (c *AuthConfig) Logout(hostname, username string) error {
 		}
 
 		_ = c.cfg.Remove([]string{hostsKey, hostname})
-		return ghConfig.Write(c.cfg)
+		return c.writeConfig()
 	}
 
 	activeUser, err := c.ActiveUser(hostname)
@@ -606,7 +614,7 @@ func (c *AuthConfig) Logout(hostname, username string) error {
 			return newAutomicVaultCredentialResolutionError(err)
 		}
 		_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username})
-		return ghConfig.Write(c.cfg)
+		return c.writeConfig()
 	}
 
 	// Capture the old active and replacement credentials before changing the
@@ -653,7 +661,7 @@ func (c *AuthConfig) Logout(hostname, username string) error {
 		c.cfg.Set([]string{hostsKey, hostname, oauthTokenKey}, nextToken)
 	}
 	c.cfg.Set([]string{hostsKey, hostname, userKey}, nextUser)
-	return ghConfig.Write(c.cfg)
+	return c.writeConfig()
 }
 
 func (c *AuthConfig) activateUser(hostname, user string) error {
@@ -676,7 +684,7 @@ func (c *AuthConfig) activateUser(hostname, user string) error {
 	}
 
 	c.cfg.Set([]string{hostsKey, hostname, userKey}, user)
-	return ghConfig.Write(c.cfg)
+	return c.writeConfig()
 }
 
 func (c *AuthConfig) UsersForHost(hostname string) []string {
