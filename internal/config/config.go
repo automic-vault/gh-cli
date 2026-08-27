@@ -229,6 +229,8 @@ type AuthConfig struct {
 	defaultHostOverride func() (string, string)
 	hostsOverride       func() []string
 	tokenOverride       func(string) (string, string)
+	keyringGet          func(string, string) (string, error)
+	keyringSet          func(string, string, string) error
 	keyringDelete       func(string, string) error
 }
 
@@ -359,7 +361,7 @@ func (c *AuthConfig) SetActiveToken(token, source string) {
 // TokenFromKeyring will retrieve the auth token for the given hostname,
 // only searching in encrypted storage.
 func (c *AuthConfig) TokenFromKeyring(hostname string) (string, error) {
-	return keyring.Get(keyringServiceName(hostname), "")
+	return c.getKeyring(keyringServiceName(hostname), "")
 }
 
 // TokenFromKeyringForUser will retrieve the auth token for the given hostname
@@ -373,7 +375,21 @@ func (c *AuthConfig) TokenFromKeyringForUser(hostname, username string) (string,
 		return "", errors.New("username cannot be blank")
 	}
 
-	return keyring.Get(keyringServiceName(hostname), username)
+	return c.getKeyring(keyringServiceName(hostname), username)
+}
+
+func (c *AuthConfig) getKeyring(service, user string) (string, error) {
+	if c.keyringGet != nil {
+		return c.keyringGet(service, user)
+	}
+	return keyring.Get(service, user)
+}
+
+func (c *AuthConfig) setKeyring(service, user, secret string) error {
+	if c.keyringSet != nil {
+		return c.keyringSet(service, user, secret)
+	}
+	return keyring.Set(service, user, secret)
 }
 
 func (c *AuthConfig) deleteKeyring(service, user string) error {
@@ -539,8 +555,8 @@ func (c *AuthConfig) activateUser(hostname, user string) error {
 
 	// If there is a token in the secure keyring for the user, move it to the active slot
 	var tokenSwitched bool
-	if token, err := keyring.Get(keyringServiceName(hostname), user); err == nil {
-		if err = keyring.Set(keyringServiceName(hostname), "", token); err != nil {
+	if token, err := c.getKeyring(keyringServiceName(hostname), user); err == nil {
+		if err = c.setKeyring(keyringServiceName(hostname), "", token); err != nil {
 			return fmt.Errorf("failed to move active token in keyring: %v", err)
 		}
 		tokenSwitched = true
