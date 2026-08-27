@@ -6,6 +6,8 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/internal/gh"
+	"github.com/cli/cli/v2/internal/keyring"
+	"github.com/cli/cli/v2/pkg/cmd/auth/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/spf13/cobra"
@@ -67,21 +69,26 @@ func tokenRun(opts *TokenOptions) error {
 	}
 
 	var val string
+	var resolveErr error
 	// If this conditional logic ends up being duplicated anywhere,
 	// we should consider making a factory function that returns the correct
 	// behavior. For now, keeping it all inline is simplest.
 	if opts.SecureStorage {
 		if opts.Username == "" {
-			val, _ = authCfg.TokenFromKeyring(hostname)
+			val, resolveErr = authCfg.TokenFromKeyring(hostname)
 		} else {
-			val, _ = authCfg.TokenFromKeyringForUser(hostname, opts.Username)
+			val, resolveErr = authCfg.TokenFromKeyringForUser(hostname, opts.Username)
 		}
 	} else {
 		if opts.Username == "" {
-			val, _ = authCfg.ActiveToken(hostname)
+			val, _, resolveErr = shared.ResolveActiveToken(authCfg, hostname)
 		} else {
-			val, _, _ = authCfg.TokenForUser(hostname, opts.Username)
+			val, _, resolveErr = authCfg.TokenForUser(hostname, opts.Username)
 		}
+	}
+
+	if resolveErr != nil && !errors.Is(resolveErr, keyring.ErrNotFound) {
+		return resolveErr
 	}
 
 	if val == "" {

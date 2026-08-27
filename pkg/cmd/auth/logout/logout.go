@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/internal/gh"
@@ -144,8 +145,12 @@ func logoutRun(opts *LogoutOptions) error {
 		username = candidates[selected].user
 	}
 
-	if src, writeable := shared.AuthTokenWriteable(authCfg, hostname); !writeable {
-		fmt.Fprintf(opts.IO.ErrOut, "The value of the %s environment variable is being used for authentication.\n", src)
+	_, source, err := shared.ResolveActiveToken(authCfg, hostname)
+	if err != nil {
+		return err
+	}
+	if strings.HasSuffix(source, "_TOKEN") {
+		fmt.Fprintf(opts.IO.ErrOut, "The value of the %s environment variable is being used for authentication.\n", source)
 		fmt.Fprint(opts.IO.ErrOut, "To erase credentials stored in GitHub CLI, first clear the value from the environment.\n")
 		return cmdutil.SilentError
 	}

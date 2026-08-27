@@ -18,6 +18,10 @@ type config interface {
 	ActiveUser(string) (string, error)
 }
 
+type activeTokenResolver interface {
+	ActiveTokenWithError(string) (string, string, error)
+}
+
 type CredentialOptions struct {
 	IO     *iostreams.IOStreams
 	Config func() (config, error)
@@ -112,10 +116,16 @@ func helperRun(opts *CredentialOptions) error {
 
 	lookupHost := wants["host"]
 	var gotUser string
-	gotToken, source := cfg.ActiveToken(lookupHost)
+	gotToken, source, err := resolveActiveToken(cfg, lookupHost)
+	if err != nil {
+		return err
+	}
 	if gotToken == "" && strings.HasPrefix(lookupHost, "gist.") {
 		lookupHost = strings.TrimPrefix(lookupHost, "gist.")
-		gotToken, source = cfg.ActiveToken(lookupHost)
+		gotToken, source, err = resolveActiveToken(cfg, lookupHost)
+		if err != nil {
+			return err
+		}
 	}
 
 	if strings.HasSuffix(source, "_TOKEN") {
@@ -141,4 +151,13 @@ func helperRun(opts *CredentialOptions) error {
 	fmt.Fprintf(opts.IO.Out, "password=%s\n", gotToken)
 
 	return nil
+}
+
+func resolveActiveToken(cfg config, hostname string) (string, string, error) {
+	if resolver, ok := any(cfg).(activeTokenResolver); ok {
+		return resolver.ActiveTokenWithError(hostname)
+	}
+
+	token, source := cfg.ActiveToken(hostname)
+	return token, source, nil
 }

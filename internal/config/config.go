@@ -563,12 +563,29 @@ func (c *AuthConfig) UsersForHost(hostname string) []string {
 	return users
 }
 
+type tokenNotFoundError struct {
+	user string
+}
+
+func (e *tokenNotFoundError) Error() string {
+	return fmt.Sprintf("no token found for '%s'", e.user)
+}
+
+func (e *tokenNotFoundError) Unwrap() error {
+	return keyring.ErrNotFound
+}
+
 func (c *AuthConfig) TokenForUser(hostname, user string) (string, string, error) {
-	if token, err := keyring.Get(keyringServiceName(hostname), user); err == nil {
+	token, err := keyring.Get(keyringServiceName(hostname), user)
+	if err == nil {
 		return token, "keyring", nil
 	}
 
-	return "", "default", fmt.Errorf("no token found for '%s'", user)
+	if !errors.Is(err, keyring.ErrNotFound) {
+		return "", "default", err
+	}
+
+	return "", "default", &tokenNotFoundError{user: user}
 }
 
 func keyringServiceName(hostname string) string {

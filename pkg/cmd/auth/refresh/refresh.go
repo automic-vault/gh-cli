@@ -166,22 +166,24 @@ func refreshRun(opts *RefreshOptions) error {
 		}
 	}
 
-	if src, writeable := shared.AuthTokenWriteable(authCfg, hostname); !writeable {
-		fmt.Fprintf(opts.IO.ErrOut, "The value of the %s environment variable is being used for authentication.\n", src)
+	activeToken, activeTokenSource, err := shared.ResolveActiveToken(authCfg, hostname)
+	if err != nil {
+		return err
+	}
+	if strings.HasSuffix(activeTokenSource, "_TOKEN") {
+		fmt.Fprintf(opts.IO.ErrOut, "The value of the %s environment variable is being used for authentication.\n", activeTokenSource)
 		fmt.Fprint(opts.IO.ErrOut, "To refresh credentials stored in GitHub CLI, first clear the value from the environment.\n")
 		return cmdutil.SilentError
 	}
 
 	additionalScopes := set.NewStringSet()
 
-	if !opts.ResetScopes {
-		if oldToken, _ := authCfg.ActiveToken(hostname); oldToken != "" {
-			if oldScopes, err := shared.GetScopes(plainHTTPClient, hostname, oldToken); err == nil {
-				for _, s := range strings.Split(oldScopes, ",") {
-					s = strings.TrimSpace(s)
-					if s != "" {
-						additionalScopes.Add(s)
-					}
+	if !opts.ResetScopes && activeToken != "" {
+		if oldScopes, err := shared.GetScopes(plainHTTPClient, hostname, activeToken); err == nil {
+			for _, s := range strings.Split(oldScopes, ",") {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					additionalScopes.Add(s)
 				}
 			}
 		}
@@ -226,7 +228,10 @@ func refreshRun(opts *RefreshOptions) error {
 
 	if credentialFlow.ShouldSetup() {
 		username, _ := authCfg.ActiveUser(hostname)
-		password, _ := authCfg.ActiveToken(hostname)
+		password, _, err := shared.ResolveActiveToken(authCfg, hostname)
+		if err != nil {
+			return err
+		}
 		if err := credentialFlow.Setup(hostname, username, password); err != nil {
 			return err
 		}
