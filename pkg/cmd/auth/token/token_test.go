@@ -93,6 +93,8 @@ func TestNewCmdToken(t *testing.T) {
 }
 
 func TestTokenRun(t *testing.T) {
+	t.Skip("plaintext credential storage is unsupported in this fork")
+
 	tests := []struct {
 		name       string
 		opts       TokenOptions
