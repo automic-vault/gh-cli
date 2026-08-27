@@ -412,6 +412,67 @@ type keyringCredential struct {
 	present bool
 }
 
+type providerMutation struct {
+	service  string
+	user     string
+	previous keyringCredential
+}
+
+type configEntrySnapshot struct {
+	keys  []string
+	value string
+}
+
+type configSnapshot struct {
+	root    []string
+	exists  bool
+	entries []configEntrySnapshot
+}
+
+func newConfigSnapshot(cfg *ghConfig.Config, root []string) configSnapshot {
+	snapshot := configSnapshot{root: append([]string(nil), root...)}
+	if _, err := cfg.Get(root); err != nil {
+		return snapshot
+	}
+	snapshot.exists = true
+	snapshot.entries = snapshotConfigEntries(cfg, root)
+	return snapshot
+}
+
+func snapshotConfigEntries(cfg *ghConfig.Config, keys []string) []configEntrySnapshot {
+	childKeys, err := cfg.Keys(keys)
+	if err != nil || len(childKeys) == 0 {
+		value, valueErr := cfg.Get(keys)
+		if valueErr != nil {
+			return nil
+		}
+		return []configEntrySnapshot{{keys: append([]string(nil), keys...), value: value}}
+	}
+
+	entries := make([]configEntrySnapshot, 0, len(childKeys))
+	for _, childKey := range childKeys {
+		childPath := append(append([]string(nil), keys...), childKey)
+		entries = append(entries, snapshotConfigEntries(cfg, childPath)...)
+	}
+	return entries
+}
+
+func (s configSnapshot) restore(cfg *ghConfig.Config) error {
+	if err := cfg.Remove(s.root); err != nil {
+		var keyNotFoundError *ghConfig.KeyNotFoundError
+		if !errors.As(err, &keyNotFoundError) {
+			return err
+		}
+	}
+	if !s.exists {
+		return nil
+	}
+	for _, entry := range s.entries {
+		cfg.Set(entry.keys, entry.value)
+	}
+	return nil
+}
+
 func (c *AuthConfig) readKeyringCredential(service, user string) (keyringCredential, error) {
 	token, err := c.getKeyring(service, user)
 	if err == nil {
@@ -421,6 +482,51 @@ func (c *AuthConfig) readKeyringCredential(service, user string) (keyringCredent
 		return keyringCredential{}, nil
 	}
 	return keyringCredential{}, newAutomicVaultCredentialResolutionError(err)
+}
+
+func (c *AuthConfig) restoreProviderMutation(mutation providerMutation) error {
+	if mutation.previous.present {
+		return c.setKeyring(mutation.service, mutation.user, mutation.previous.token)
+	}
+
+	err := c.deleteKeyring(mutation.service, mutation.user)
+	if errors.Is(err, keyring.ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
+func (c *AuthConfig) rollbackProviderMutations(mutations []providerMutation) []error {
+	var rollbackErrors []error
+	for _, mutation := range mutations {
+		if err := c.restoreProviderMutation(mutation); err != nil {
+			rollbackErrors = append(rollbackErrors, err)
+		}
+	}
+	return rollbackErrors
+}
+
+func (c *AuthConfig) restoreConfigAfterWriteFailure(snapshot configSnapshot, mutations []providerMutation, writeErr error) error {
+	var rollbackErrors []error
+	if err := snapshot.restore(c.cfg); err != nil {
+		rollbackErrors = append(rollbackErrors, err)
+	}
+	// A test writer is deliberately allowed to fail without touching the
+	// filesystem. For the real writer, retry after restoring the in-memory
+	// snapshot so a partial write is repaired when possible.
+	if c.configWrite == nil {
+		if err := ghConfig.Write(c.cfg); err != nil {
+			rollbackErrors = append(rollbackErrors, err)
+		}
+	}
+	rollbackErrors = append(rollbackErrors, c.rollbackProviderMutations(mutations)...)
+	if len(rollbackErrors) == 0 {
+		return writeErr
+	}
+	causes := make([]error, 0, len(rollbackErrors)+1)
+	causes = append(causes, writeErr)
+	causes = append(causes, rollbackErrors...)
+	return newAutomicVaultCredentialResolutionError(errors.Join(causes...))
 }
 
 func (c *AuthConfig) resolveUserCredential(hostname, user string) (string, string, error) {
@@ -443,14 +549,11 @@ func (c *AuthConfig) rollbackActiveKeyringCredential(service string, previous ke
 	if !providerMutated {
 		return nil
 	}
-	if previous.present {
-		return c.setKeyring(service, "", previous.token)
-	}
-	err := c.deleteKeyring(service, "")
-	if errors.Is(err, keyring.ErrNotFound) {
-		return nil
-	}
-	return err
+	return c.restoreProviderMutation(providerMutation{
+		service:  service,
+		user:     "",
+		previous: previous,
+	})
 }
 
 // ActiveUser will retrieve the username for the active user at the given hostname.
@@ -532,34 +635,40 @@ func (c *AuthConfig) Login(hostname, username, token, gitProtocol string, secure
 }
 
 func (c *AuthConfig) SwitchUser(hostname, user string) error {
-	previouslyActiveUser, err := c.ActiveUser(hostname)
+	_, err := c.ActiveUser(hostname)
 	if err != nil {
 		return fmt.Errorf("failed to get active user: %s", err)
 	}
 
-	previouslyActiveToken, previousSource := c.ActiveToken(hostname)
+	previouslyActiveToken, previousSource, err := c.ActiveTokenWithError(hostname)
+	if err != nil {
+		return err
+	}
 	if previousSource != "keyring" && previousSource != "oauth_token" {
 		return fmt.Errorf("currently active token for %s is from %s", hostname, previousSource)
 	}
 
-	err = c.activateUser(hostname, user)
+	snapshot := newConfigSnapshot(c.cfg, []string{hostsKey, hostname})
+	previousActive := keyringCredential{
+		token:   previouslyActiveToken,
+		present: previousSource == "keyring",
+	}
+	mutations, configWriteAttempted, err := c.activateUserWithMutations(hostname, user, &previousActive)
 	if err != nil {
-		// Given that activateUser can only fail before the config is written, or when writing the config
-		// we know for sure that the config has not been written. However, we still should restore it back
-		// to its previous clean state just in case something else tries to make use of the config, or tries
-		// to write it again.
-		if previousSource == "keyring" {
-			if setErr := keyring.Set(keyringServiceName(hostname), "", previouslyActiveToken); setErr != nil {
-				err = errors.Join(err, setErr)
-			}
+		if configWriteAttempted {
+			return c.restoreConfigAfterWriteFailure(snapshot, mutations, err)
 		}
-
-		if previousSource == "oauth_token" {
-			c.cfg.Set([]string{hostsKey, hostname, oauthTokenKey}, previouslyActiveToken)
+		if restoreErr := snapshot.restore(c.cfg); restoreErr != nil {
+			return newAutomicVaultCredentialResolutionError(errors.Join(err, restoreErr))
 		}
-		c.cfg.Set([]string{hostsKey, hostname, userKey}, previouslyActiveUser)
-
-		return err
+		rollbackErrors := c.rollbackProviderMutations(mutations)
+		if len(rollbackErrors) == 0 {
+			return err
+		}
+		causes := make([]error, 0, len(rollbackErrors)+1)
+		causes = append(causes, err)
+		causes = append(causes, rollbackErrors...)
+		return newAutomicVaultCredentialResolutionError(errors.Join(causes...))
 	}
 
 	return nil
@@ -570,6 +679,7 @@ func (c *AuthConfig) SwitchUser(hostname, user string) error {
 func (c *AuthConfig) Logout(hostname, username string) error {
 	users := c.UsersForHost(hostname)
 	service := keyringServiceName(hostname)
+	snapshot := newConfigSnapshot(c.cfg, []string{hostsKey, hostname})
 
 	// If there is only one (or zero) users, capture both provider slots before
 	// deleting either one. This leaves enough state to restore the active slot
@@ -579,7 +689,8 @@ func (c *AuthConfig) Logout(hostname, username string) error {
 		if err != nil {
 			return err
 		}
-		if _, err = c.readKeyringCredential(service, username); err != nil {
+		previousAccount, err := c.readKeyringCredential(service, username)
+		if err != nil {
 			return err
 		}
 
@@ -587,18 +698,39 @@ func (c *AuthConfig) Logout(hostname, username string) error {
 		if activeDeleteErr != nil && !errors.Is(activeDeleteErr, keyring.ErrNotFound) {
 			return newAutomicVaultCredentialResolutionError(activeDeleteErr)
 		}
-		activeProviderMutated := activeDeleteErr == nil
+		var mutations []providerMutation
+		if activeDeleteErr == nil {
+			mutations = append(mutations, providerMutation{
+				service:  service,
+				user:     "",
+				previous: previousActive,
+			})
+		}
 
 		accountDeleteErr := c.deleteKeyring(service, username)
 		if accountDeleteErr != nil && !errors.Is(accountDeleteErr, keyring.ErrNotFound) {
-			if rollbackErr := c.rollbackActiveKeyringCredential(service, previousActive, activeProviderMutated); rollbackErr != nil {
-				return newAutomicVaultCredentialResolutionError(errors.Join(accountDeleteErr, rollbackErr))
+			rollbackErrors := c.rollbackProviderMutations(mutations)
+			if len(rollbackErrors) > 0 {
+				causes := make([]error, 0, len(rollbackErrors)+1)
+				causes = append(causes, accountDeleteErr)
+				causes = append(causes, rollbackErrors...)
+				return newAutomicVaultCredentialResolutionError(errors.Join(causes...))
 			}
 			return newAutomicVaultCredentialResolutionError(accountDeleteErr)
 		}
+		if accountDeleteErr == nil {
+			mutations = append(mutations, providerMutation{
+				service:  service,
+				user:     username,
+				previous: previousAccount,
+			})
+		}
 
 		_ = c.cfg.Remove([]string{hostsKey, hostname})
-		return c.writeConfig()
+		if err := c.writeConfig(); err != nil {
+			return c.restoreConfigAfterWriteFailure(snapshot, mutations, err)
+		}
+		return nil
 	}
 
 	activeUser, err := c.ActiveUser(hostname)
@@ -609,12 +741,27 @@ func (c *AuthConfig) Logout(hostname, username string) error {
 	// An inactive account must be removed from the provider before changing
 	// the local account list.
 	if activeUser != username {
-		err := c.deleteKeyring(service, username)
-		if err != nil && !errors.Is(err, keyring.ErrNotFound) {
-			return newAutomicVaultCredentialResolutionError(err)
+		previousAccount, err := c.readKeyringCredential(service, username)
+		if err != nil {
+			return err
+		}
+		deleteErr := c.deleteKeyring(service, username)
+		if deleteErr != nil && !errors.Is(deleteErr, keyring.ErrNotFound) {
+			return newAutomicVaultCredentialResolutionError(deleteErr)
+		}
+		var mutations []providerMutation
+		if deleteErr == nil {
+			mutations = append(mutations, providerMutation{
+				service:  service,
+				user:     username,
+				previous: previousAccount,
+			})
 		}
 		_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username})
-		return c.writeConfig()
+		if err := c.writeConfig(); err != nil {
+			return c.restoreConfigAfterWriteFailure(snapshot, mutations, err)
+		}
+		return nil
 	}
 
 	// Capture the old active and replacement credentials before changing the
@@ -631,27 +778,52 @@ func (c *AuthConfig) Logout(hostname, username string) error {
 	if err != nil {
 		return err
 	}
+	previousDeparting, err := c.readKeyringCredential(service, username)
+	if err != nil {
+		return err
+	}
 
-	var activeProviderMutated bool
+	var mutations []providerMutation
 	if nextSource == "keyring" {
 		if err := c.setKeyring(service, "", nextToken); err != nil {
 			return newAutomicVaultCredentialResolutionError(err)
 		}
-		activeProviderMutated = true
+		mutations = append(mutations, providerMutation{
+			service:  service,
+			user:     "",
+			previous: previousActive,
+		})
 	} else {
 		deleteErr := c.deleteKeyring(service, "")
 		if deleteErr != nil && !errors.Is(deleteErr, keyring.ErrNotFound) {
 			return newAutomicVaultCredentialResolutionError(deleteErr)
 		}
-		activeProviderMutated = deleteErr == nil
+		if deleteErr == nil {
+			mutations = append(mutations, providerMutation{
+				service:  service,
+				user:     "",
+				previous: previousActive,
+			})
+		}
 	}
 
 	departingDeleteErr := c.deleteKeyring(service, username)
 	if departingDeleteErr != nil && !errors.Is(departingDeleteErr, keyring.ErrNotFound) {
-		if rollbackErr := c.rollbackActiveKeyringCredential(service, previousActive, activeProviderMutated); rollbackErr != nil {
-			return newAutomicVaultCredentialResolutionError(errors.Join(departingDeleteErr, rollbackErr))
+		rollbackErrors := c.rollbackProviderMutations(mutations)
+		if len(rollbackErrors) > 0 {
+			causes := make([]error, 0, len(rollbackErrors)+1)
+			causes = append(causes, departingDeleteErr)
+			causes = append(causes, rollbackErrors...)
+			return newAutomicVaultCredentialResolutionError(errors.Join(causes...))
 		}
 		return newAutomicVaultCredentialResolutionError(departingDeleteErr)
+	}
+	if departingDeleteErr == nil {
+		mutations = append(mutations, providerMutation{
+			service:  service,
+			user:     username,
+			previous: previousDeparting,
+		})
 	}
 
 	_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username})
@@ -661,30 +833,57 @@ func (c *AuthConfig) Logout(hostname, username string) error {
 		c.cfg.Set([]string{hostsKey, hostname, oauthTokenKey}, nextToken)
 	}
 	c.cfg.Set([]string{hostsKey, hostname, userKey}, nextUser)
-	return c.writeConfig()
+	if err := c.writeConfig(); err != nil {
+		return c.restoreConfigAfterWriteFailure(snapshot, mutations, err)
+	}
+	return nil
 }
 
-func (c *AuthConfig) activateUser(hostname, user string) error {
+func (c *AuthConfig) activateUserWithMutations(hostname, user string, previousActive *keyringCredential) ([]providerMutation, bool, error) {
 	token, source, err := c.resolveUserCredential(hostname, user)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 
 	service := keyringServiceName(hostname)
+	var mutations []providerMutation
 	if source == "keyring" {
 		if err := c.setKeyring(service, "", token); err != nil {
-			return newAutomicVaultCredentialResolutionError(err)
+			return nil, false, newAutomicVaultCredentialResolutionError(err)
+		}
+		if previousActive != nil {
+			mutations = append(mutations, providerMutation{
+				service:  service,
+				user:     "",
+				previous: *previousActive,
+			})
 		}
 		_ = c.cfg.Remove([]string{hostsKey, hostname, oauthTokenKey})
 	} else {
-		if err := c.deleteKeyring(service, ""); err != nil && !errors.Is(err, keyring.ErrNotFound) {
-			return newAutomicVaultCredentialResolutionError(err)
+		deleteErr := c.deleteKeyring(service, "")
+		if deleteErr != nil && !errors.Is(deleteErr, keyring.ErrNotFound) {
+			return nil, false, newAutomicVaultCredentialResolutionError(deleteErr)
+		}
+		if previousActive != nil && deleteErr == nil {
+			mutations = append(mutations, providerMutation{
+				service:  service,
+				user:     "",
+				previous: *previousActive,
+			})
 		}
 		c.cfg.Set([]string{hostsKey, hostname, oauthTokenKey}, token)
 	}
 
 	c.cfg.Set([]string{hostsKey, hostname, userKey}, user)
-	return c.writeConfig()
+	if err := c.writeConfig(); err != nil {
+		return mutations, true, err
+	}
+	return mutations, false, nil
+}
+
+func (c *AuthConfig) activateUser(hostname, user string) error {
+	_, _, err := c.activateUserWithMutations(hostname, user, nil)
+	return err
 }
 
 func (c *AuthConfig) UsersForHost(hostname string) []string {
