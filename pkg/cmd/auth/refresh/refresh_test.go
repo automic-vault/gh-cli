@@ -470,6 +470,10 @@ func Test_refreshRun(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.name == "insecure storage" {
+				t.Skip("plaintext credential storage is unsupported in this fork")
+			}
+
 			aa := authArgs{}
 			tt.opts.AuthFlow = func(_ *http.Client, _ *iostreams.IOStreams, hostname string, scopes []string, interactive bool, clipboard bool) (token, username, error) {
 				aa.hostname = hostname
@@ -484,7 +488,7 @@ func Test_refreshRun(t *testing.T) {
 
 			cfg, _ := config.NewIsolatedTestConfig(t, "")
 			for _, hostname := range tt.cfgHosts {
-				_, err := cfg.Authentication().Login(hostname, "test-user", "abc123", "https", false)
+				_, err := cfg.Authentication().Login(hostname, "test-user", "abc123", "https", true)
 				require.NoError(t, err)
 			}
 			tt.opts.Config = func() (gh.Config, error) {

@@ -156,7 +156,7 @@ func newTestHuhPrompter() *huhPrompter {
 func runForm(t *testing.T, f *huh.Form, ix interaction) {
 	t.Helper()
 	r, w := io.Pipe()
-	f.WithInput(r).WithOutput(io.Discard).WithWidth(80)
+	f.WithInput(r).WithOutput(io.Discard).WithWidth(80).WithAccessible(false)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- f.Run() }()
@@ -670,7 +670,7 @@ func TestRunFormTranslatesErrUserAborted(t *testing.T) {
 	form, _ := p.buildSelectForm("Pick one:", "", []string{"a", "b", "c"})
 
 	r, w := io.Pipe()
-	form.WithInput(r).WithOutput(io.Discard).WithWidth(80)
+	form.WithInput(r).WithOutput(io.Discard).WithWidth(80).WithAccessible(false)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- p.runForm(form) }()
