@@ -276,12 +276,15 @@ func TestStatusRunOperationalVaultFailureCoversInactiveAccounts(t *testing.T) {
 	assert.Equal(t, "github.com", multiAccountAuthCfg.activeResolverHost)
 	assert.Equal(t, "github.com", multiAccountAuthCfg.perUserHost)
 	assert.Equal(t, "synthetic-secondary-account", multiAccountAuthCfg.perUser)
-	assert.Equal(t, "github.com\n  X Vault retrieval unavailable.\n  - Active account: true\n", stderr.String())
+	assert.Equal(t, "github.com\n  X Vault retrieval unavailable.\n  - Active account: false\n", stderr.String())
 	output := strings.ToLower(stdout.String() + stderr.String())
 	assert.NotContains(t, output, "invalid")
 	assert.NotContains(t, output, "login")
+	assert.NotContains(t, output, "refresh")
+	assert.NotContains(t, output, "synthetic-active-token")
 	assert.NotContains(t, output, "synthetic-poison-token")
 	assert.NotContains(t, output, "synthetic-poison-source")
+	assert.NotContains(t, output, "synthetic-keyring")
 	assert.NotContains(t, output, "synthetic-account")
 	assert.NotContains(t, output, "synthetic-secondary-account")
 	require.ErrorIs(t, err, cmdutil.SilentError)
@@ -299,7 +302,7 @@ type multiAccountStatusVaultAuthConfig struct {
 func (c *multiAccountStatusVaultAuthConfig) ActiveTokenWithError(hostname string) (string, string, error) {
 	c.activeResolverCalls++
 	c.activeResolverHost = hostname
-	return "synthetic-poison-token", "synthetic-poison-source", errSyntheticVaultStatus
+	return "synthetic-active-token", "synthetic-keyring", nil
 }
 
 func (c *multiAccountStatusVaultAuthConfig) TokenForUser(hostname, username string) (string, string, error) {
