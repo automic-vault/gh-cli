@@ -43,6 +43,8 @@ const (
 	versionKey             = "version"
 )
 
+var errCredentialNotFound = errors.New("no token found")
+
 func NewConfig() (gh.Config, error) {
 	c, err := ghConfig.Read(fallbackConfig())
 	if err != nil {
@@ -292,35 +294,58 @@ func (c *AuthConfig) ActiveTokenType(hostname string) gh.TokenType {
 // never contacts the token endpoint to refresh it. Callers that need a token valid for API calls should use
 // ActiveTokenWithRefresh.
 func (c *AuthConfig) ActiveToken(hostname string) gh.Credential {
+	credential, _ := c.activeCredentialWithError(hostname)
+	return credential
+}
+
+// ActiveTokenWithError retrieves the active token without discarding credential-provider errors.
+func (c *AuthConfig) ActiveTokenWithError(hostname string) (string, string, error) {
+	credential, err := c.activeCredentialWithError(hostname)
+	return credential.Token, credential.Source, err
+}
+
+func (c *AuthConfig) activeCredentialWithError(hostname string) (gh.Credential, error) {
 	if c.tokenOverride != nil {
 		token, source := c.tokenOverride(hostname)
-		return gh.Credential{Source: source, Token: token}
+		return gh.Credential{Source: source, Token: token}, nil
 	}
 	token, source := tokenFromEnv(hostname)
 	if token != "" {
-		return gh.Credential{Source: source, Token: token}
+		return gh.Credential{Source: source, Token: token}, nil
 	}
 
-	if user, err := c.ActiveUser(hostname); err == nil {
+	if user, err := c.ActiveUser(hostname); err == nil && user != "" {
 		if credential, err := c.TokenForUser(hostname, user); err == nil {
-			return credential
+			return credential, nil
+		} else if !errors.Is(err, errCredentialNotFound) {
+			return gh.Credential{}, fmt.Errorf("failed to resolve authentication token: %w", err)
+		}
+	} else if err != nil {
+		var keyNotFoundError *ghConfig.KeyNotFoundError
+		if !errors.As(err, &keyNotFoundError) {
+			return gh.Credential{}, err
 		}
 	}
 
 	// We should generally be able to find a token for the active user, but in some cases such as if the keyring was
 	// set up in a very old version of the CLI, it may only have an unkeyed token, so fall back to it.
 	if token, err := c.TokenFromKeyring(hostname); err == nil {
-		return gh.Credential{Source: gh.TokenSourceKeyring, Token: token}
+		return gh.Credential{Source: gh.TokenSourceKeyring, Token: token}, nil
+	} else if !errors.Is(err, keyring.ErrNotFound) {
+		return gh.Credential{}, fmt.Errorf("failed to resolve authentication token: %w", err)
 	}
 
-	return gh.Credential{Source: source, Token: token}
+	return gh.Credential{}, nil
 }
 
 // ActiveTokenWithRefresh retrieves the active credential for the given hostname and, when it is refreshable and its
 // access token is expiring, renews and persists it, returning the credential to use and the refresh outcome.
 // Non-refreshable credentials are returned unchanged with RefreshStatusInapplicable.
 func (c *AuthConfig) ActiveTokenWithRefresh(hostname string) (gh.Credential, gh.RefreshStatus, error) {
-	credential := c.ActiveToken(hostname)
+	credential, err := c.activeCredentialWithError(hostname)
+	if err != nil {
+		return credential, gh.RefreshStatusInapplicable, err
+	}
 	if !credential.IsRefreshable() {
 		return credential, gh.RefreshStatusInapplicable, nil
 	}
@@ -681,6 +706,8 @@ func (c *AuthConfig) UsersForHost(hostname string) []string {
 func (c *AuthConfig) TokenForUser(hostname, user string) (gh.Credential, error) {
 	if token, err := keyring.Get(keyringServiceName(hostname), user); err == nil {
 		return gh.Credential{Source: gh.TokenSourceKeyring, Token: token}, nil
+	} else if !errors.Is(err, keyring.ErrNotFound) {
+		return gh.Credential{}, err
 	}
 
 	if credential, _, err := c.refreshableForUser(hostname, user); err == nil {
@@ -689,7 +716,7 @@ func (c *AuthConfig) TokenForUser(hostname, user string) (gh.Credential, error) 
 		return gh.Credential{}, err
 	}
 
-	return gh.Credential{Source: gh.TokenSourceDefault}, fmt.Errorf("no token found for '%s'", user)
+	return gh.Credential{Source: gh.TokenSourceDefault}, fmt.Errorf("%w for '%s'", errCredentialNotFound, user)
 }
 
 // TokenForUserWithRefresh retrieves the credential for a specified user and hostname and, when it is refreshable and

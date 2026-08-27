@@ -184,7 +184,7 @@ func AddCacheTTLHeader(rt http.RoundTripper, ttl time.Duration) http.RoundTrippe
 // token source. It is the backward-compatible entry point retained for external callers of this package; gh's own code
 // authenticates through the refresh-aware AddAuthTokenHeaderWithRefresh.
 func AddAuthTokenHeader(rt http.RoundTripper, cfg config) http.RoundTripper {
-	return addAuthHeaderRoundTripper(rt, func(host string) string {
+	return addAuthHeaderRoundTripper(rt, func(host string) (string, error) {
 		token, _ := cfg.ActiveToken(host)
 		if token == "" {
 			// The request may be aimed at a host's api_host, which gh is
@@ -196,7 +196,7 @@ func AddAuthTokenHeader(rt http.RoundTripper, cfg config) http.RoundTripper {
 				token, _ = cfg.ActiveToken(canonicalHost)
 			}
 		}
-		return token
+		return token, nil
 	})
 }
 
@@ -204,10 +204,11 @@ func AddAuthTokenHeader(rt http.RoundTripper, cfg config) http.RoundTripper {
 // token before attaching it, and is the attach helper gh's own code uses so its requests go through the
 // refresh path rather than the backward-compatible primitive seam.
 func AddAuthTokenHeaderWithRefresh(rt http.RoundTripper, cfg refreshingConfig) http.RoundTripper {
-	return addAuthHeaderRoundTripper(rt, func(host string) string {
-		// Refreshing is best effort because it happens before actual expiry, and expiry checks can be unreliable due
-		// to clock skew. Continue with the returned token and let the API determine whether it is valid.
-		cred, _, _ := cfg.ActiveTokenWithRefresh(host)
+	return addAuthHeaderRoundTripper(rt, func(host string) (string, error) {
+		cred, _, err := cfg.ActiveTokenWithRefresh(host)
+		if err != nil {
+			return "", err
+		}
 		token := cred.Token
 		if token == "" {
 			// The request may be aimed at a host's api_host, which gh is
@@ -216,18 +217,21 @@ func AddAuthTokenHeaderWithRefresh(rt http.RoundTripper, cfg refreshingConfig) h
 			// adds a token where there would have been none, so hosts we
 			// already authenticate keep resolving exactly as before.
 			if canonicalHost, ok := cfg.HostForAPIHost(host); ok {
-				cred, _, _ = cfg.ActiveTokenWithRefresh(canonicalHost)
+				cred, _, err = cfg.ActiveTokenWithRefresh(canonicalHost)
+				if err != nil {
+					return "", err
+				}
 				token = cred.Token
 			}
 		}
-		return token
+		return token, nil
 	})
 }
 
 // addAuthHeaderRoundTripper wraps rt so each request receives the token returned by tokenForHost for its (normalized)
 // host, unless the Authorization header is already set or the request is a redirect to a different host. tokenForHost
 // encapsulates how the token is resolved, which is the only difference between the primitive and refresh-aware paths.
-func addAuthHeaderRoundTripper(rt http.RoundTripper, tokenForHost func(host string) string) http.RoundTripper {
+func addAuthHeaderRoundTripper(rt http.RoundTripper, tokenForHost func(host string) (string, error)) http.RoundTripper {
 	return &funcTripper{roundTrip: func(req *http.Request) (*http.Response, error) {
 		// If the header is already set in the request, don't overwrite it.
 		if req.Header.Get(authorization) != "" {
@@ -246,7 +250,10 @@ func addAuthHeaderRoundTripper(rt http.RoundTripper, tokenForHost func(host stri
 		}
 
 		hostnameInRequest := ghauth.NormalizeHostname(getHostname(req))
-		token := tokenForHost(hostnameInRequest)
+		token, err := tokenForHost(hostnameInRequest)
+		if err != nil {
+			return nil, err
+		}
 		if token != "" {
 			req.Header.Set(authorization, fmt.Sprintf("token %s", token))
 		}
