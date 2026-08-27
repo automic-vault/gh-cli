@@ -508,29 +508,32 @@ func (c *AuthConfig) rollbackProviderMutations(mutations []providerMutation) []e
 }
 
 func (c *AuthConfig) restoreConfigAfterWriteFailure(snapshot configSnapshot, mutations []providerMutation, writeErr error) error {
-	var rollbackErrors []error
+	localErrors := []error{writeErr}
 	if err := snapshot.restore(c.cfg); err != nil {
-		rollbackErrors = append(rollbackErrors, err)
+		localErrors = append(localErrors, err)
 	}
 	// A test writer is deliberately allowed to fail without touching the
 	// filesystem. For the real writer, retry after restoring the in-memory
 	// snapshot so a partial write is repaired when possible.
 	if c.configRepairWrite != nil {
 		if err := c.configRepairWrite(); err != nil {
-			rollbackErrors = append(rollbackErrors, err)
+			localErrors = append(localErrors, err)
 		}
 	} else if c.configWrite == nil {
 		if err := ghConfig.Write(c.cfg); err != nil {
-			rollbackErrors = append(rollbackErrors, err)
+			localErrors = append(localErrors, err)
 		}
 	}
-	rollbackErrors = append(rollbackErrors, c.rollbackProviderMutations(mutations)...)
-	if len(rollbackErrors) == 0 {
-		return writeErr
+	providerErrors := c.rollbackProviderMutations(mutations)
+	if len(providerErrors) == 0 {
+		if len(localErrors) == 1 {
+			return localErrors[0]
+		}
+		return errors.Join(localErrors...)
 	}
-	causes := make([]error, 0, len(rollbackErrors)+1)
-	causes = append(causes, writeErr)
-	causes = append(causes, rollbackErrors...)
+	causes := make([]error, 0, len(localErrors)+len(providerErrors))
+	causes = append(causes, localErrors...)
+	causes = append(causes, providerErrors...)
 	return newAutomicVaultCredentialResolutionError(errors.Join(causes...))
 }
 
@@ -548,17 +551,6 @@ func (c *AuthConfig) resolveUserCredential(hostname, user string) (string, strin
 		return token, "oauth_token", nil
 	}
 	return "", "", fmt.Errorf("no token found for %s", user)
-}
-
-func (c *AuthConfig) rollbackActiveKeyringCredential(service string, previous keyringCredential, providerMutated bool) error {
-	if !providerMutated {
-		return nil
-	}
-	return c.restoreProviderMutation(providerMutation{
-		service:  service,
-		user:     "",
-		previous: previous,
-	})
 }
 
 // ActiveUser will retrieve the username for the active user at the given hostname.
@@ -645,7 +637,7 @@ func (c *AuthConfig) SwitchUser(hostname, user string) error {
 		return fmt.Errorf("failed to get active user: %s", err)
 	}
 
-	previouslyActiveToken, previousSource, err := c.ActiveTokenWithError(hostname)
+	_, previousSource, err := c.ActiveTokenWithError(hostname)
 	if err != nil {
 		return err
 	}
@@ -653,18 +645,22 @@ func (c *AuthConfig) SwitchUser(hostname, user string) error {
 		return fmt.Errorf("currently active token for %s is from %s", hostname, previousSource)
 	}
 
-	snapshot := newConfigSnapshot(c.cfg, []string{hostsKey, hostname})
-	previousActive := keyringCredential{
-		token:   previouslyActiveToken,
-		present: previousSource == "keyring",
+	// ActiveTokenWithError resolves the selected account slot. The active
+	// host-wide slot is a separate provider entry and may have drifted, so read
+	// it independently before resolving or mutating the replacement account.
+	previousActive, err := c.readKeyringCredential(keyringServiceName(hostname), "")
+	if err != nil {
+		return err
 	}
+
+	snapshot := newConfigSnapshot(c.cfg, []string{hostsKey})
 	mutations, configWriteAttempted, err := c.activateUserWithMutations(hostname, user, &previousActive)
 	if err != nil {
 		if configWriteAttempted {
 			return c.restoreConfigAfterWriteFailure(snapshot, mutations, err)
 		}
-		if restoreErr := snapshot.restore(c.cfg); restoreErr != nil {
-			return newAutomicVaultCredentialResolutionError(errors.Join(err, restoreErr))
+		if len(mutations) == 0 {
+			return err
 		}
 		rollbackErrors := c.rollbackProviderMutations(mutations)
 		if len(rollbackErrors) == 0 {
@@ -684,7 +680,7 @@ func (c *AuthConfig) SwitchUser(hostname, user string) error {
 func (c *AuthConfig) Logout(hostname, username string) error {
 	users := c.UsersForHost(hostname)
 	service := keyringServiceName(hostname)
-	snapshot := newConfigSnapshot(c.cfg, []string{hostsKey, hostname})
+	snapshot := newConfigSnapshot(c.cfg, []string{hostsKey})
 
 	// If there is only one (or zero) users, capture both provider slots before
 	// deleting either one. This leaves enough state to restore the active slot
