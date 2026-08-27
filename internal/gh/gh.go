@@ -146,6 +146,9 @@ type AuthConfig interface {
 	// the token itself.
 	ActiveTokenType(hostname string) TokenType
 
+	// ActiveTokenWithError retrieves the active token without discarding credential-provider errors.
+	ActiveTokenWithError(hostname string) (token string, source string, err error)
+
 	// HasEnvToken returns true when a token has been specified in an environment variable, else returns false.
 	HasEnvToken() bool
 

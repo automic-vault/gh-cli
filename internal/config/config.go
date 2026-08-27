@@ -248,28 +248,46 @@ func (c *AuthConfig) ActiveTokenType(hostname string) gh.TokenType {
 // ActiveToken will retrieve the active auth token for the given hostname,
 // searching environment variables and encrypted storage.
 func (c *AuthConfig) ActiveToken(hostname string) (string, string) {
+	token, source, _ := c.ActiveTokenWithError(hostname)
+	return token, source
+}
+
+// ActiveTokenWithError retrieves the active token while preserving credential-provider errors.
+func (c *AuthConfig) ActiveTokenWithError(hostname string) (string, string, error) {
 	if c.tokenOverride != nil {
-		return c.tokenOverride(hostname)
+		token, source := c.tokenOverride(hostname)
+		return token, source, nil
 	}
 	token, source := tokenFromEnv(hostname)
-	if token == "" {
-		var user string
-		var err error
-		if user, err = c.ActiveUser(hostname); err == nil {
-			token, err = c.TokenFromKeyringForUser(hostname, user)
-		}
-		if err != nil {
-			// We should generally be able to find a token for the active user,
-			// but in some cases such as if the keyring was set up in a very old
-			// version of the CLI, it may only have a unkeyed token, so fallback
-			// to it.
-			token, err = c.TokenFromKeyring(hostname)
-		}
+	if token != "" {
+		return token, source, nil
+	}
+
+	user, err := c.ActiveUser(hostname)
+	if err == nil && user != "" {
+		token, err = c.TokenFromKeyringForUser(hostname, user)
 		if err == nil {
-			source = "keyring"
+			return token, "keyring", nil
+		}
+		if !errors.Is(err, keyring.ErrNotFound) {
+			return "", "", fmt.Errorf("failed to resolve authentication token: %w", err)
+		}
+	} else if err != nil {
+		var keyNotFoundError *ghConfig.KeyNotFoundError
+		if !errors.As(err, &keyNotFoundError) {
+			return "", "", err
 		}
 	}
-	return token, source
+
+	// Older installations may only have the host-wide keyring entry.
+	token, err = c.TokenFromKeyring(hostname)
+	if err == nil {
+		return token, "keyring", nil
+	}
+	if errors.Is(err, keyring.ErrNotFound) {
+		return "", "", nil
+	}
+	return "", "", fmt.Errorf("failed to resolve authentication token: %w", err)
 }
 
 // HasActiveToken returns true when a token for the hostname is present.
