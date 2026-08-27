@@ -128,6 +128,29 @@ type StatusOptions struct {
 	Active    bool
 }
 
+type plannedAuthEntry struct {
+	active      bool
+	gitProtocol string
+	hostname    string
+	token       string
+	tokenSource string
+	username    string
+}
+
+type credentialResolutionMarker interface {
+	IsAutomicVaultCredentialResolution() bool
+}
+
+func isCredentialResolutionError(err error) bool {
+	var marker credentialResolutionMarker
+	return errors.As(err, &marker) && marker.IsAutomicVaultCredentialResolution()
+}
+
+func reportVaultRetrievalFailure(opts *StatusOptions, hostname string, active bool) error {
+	fmt.Fprintf(opts.IO.ErrOut, "%s\n  X Vault retrieval unavailable.\n  - Active account: %v\n", hostname, active)
+	return cmdutil.SilentError
+}
+
 func NewCmdStatus(f *cmdutil.Factory, runF func(*StatusOptions) error) *cobra.Command {
 	opts := &StatusOptions{
 		HttpClient: f.HttpClient,
@@ -223,26 +246,23 @@ func statusRun(opts *StatusOptions) error {
 		return cmdutil.SilentError
 	}
 
-	httpClient, err := opts.HttpClient()
-	if err != nil {
-		return err
-	}
-
-	var finalErr error
-	statuses := newAuthStatus()
-
+	plannedEntries := make([]plannedAuthEntry, 0, len(hostnames))
 	for _, hostname := range hostnames {
 		if opts.Hostname != "" && opts.Hostname != hostname {
 			continue
 		}
 
-		var activeUser string
 		gitProtocol := cfg.GitProtocol(hostname).Value
-		activeUserToken, activeUserTokenSource := authCfg.ActiveToken(hostname)
+		activeUserToken, activeUserTokenSource, err := shared.ResolveActiveToken(authCfg, hostname)
+		if err != nil {
+			return reportVaultRetrievalFailure(opts, hostname, true)
+		}
+
+		activeUser := ""
 		if authTokenWriteable(activeUserTokenSource) {
 			activeUser, _ = authCfg.ActiveUser(hostname)
 		}
-		entry := buildEntry(httpClient, buildEntryOptions{
+		plannedEntries = append(plannedEntries, plannedAuthEntry{
 			active:      true,
 			gitProtocol: gitProtocol,
 			hostname:    hostname,
@@ -250,11 +270,6 @@ func statusRun(opts *StatusOptions) error {
 			tokenSource: activeUserTokenSource,
 			username:    activeUser,
 		})
-		statuses.Hosts[hostname] = append(statuses.Hosts[hostname], entry)
-
-		if finalErr == nil && entry.State != authEntryStateSuccess {
-			finalErr = cmdutil.SilentError
-		}
 
 		if opts.Active {
 			continue
@@ -265,8 +280,14 @@ func statusRun(opts *StatusOptions) error {
 			if username == activeUser {
 				continue
 			}
-			token, tokenSource, _ := authCfg.TokenForUser(hostname, username)
-			entry := buildEntry(httpClient, buildEntryOptions{
+			token, tokenSource, err := authCfg.TokenForUser(hostname, username)
+			if err != nil {
+				if isCredentialResolutionError(err) {
+					return reportVaultRetrievalFailure(opts, hostname, false)
+				}
+				token = ""
+			}
+			plannedEntries = append(plannedEntries, plannedAuthEntry{
 				active:      false,
 				gitProtocol: gitProtocol,
 				hostname:    hostname,
@@ -274,11 +295,29 @@ func statusRun(opts *StatusOptions) error {
 				tokenSource: tokenSource,
 				username:    username,
 			})
-			statuses.Hosts[hostname] = append(statuses.Hosts[hostname], entry)
+		}
+	}
 
-			if finalErr == nil && entry.State != authEntryStateSuccess {
-				finalErr = cmdutil.SilentError
-			}
+	httpClient, err := opts.HttpClient()
+	if err != nil {
+		return err
+	}
+
+	var finalErr error
+	statuses := newAuthStatus()
+	for _, planned := range plannedEntries {
+		entry := buildEntry(httpClient, buildEntryOptions{
+			active:      planned.active,
+			gitProtocol: planned.gitProtocol,
+			hostname:    planned.hostname,
+			token:       planned.token,
+			tokenSource: planned.tokenSource,
+			username:    planned.username,
+		})
+		statuses.Hosts[planned.hostname] = append(statuses.Hosts[planned.hostname], entry)
+
+		if finalErr == nil && entry.State != authEntryStateSuccess {
+			finalErr = cmdutil.SilentError
 		}
 	}
 
