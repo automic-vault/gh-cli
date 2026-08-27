@@ -317,8 +317,8 @@ func TestLoginSecureStorageExistingAccountConfigFailureRestoresAllProviderState(
 		{kind: "get", user: ""},
 		{kind: "set", user: f.account, token: f.newToken},
 		{kind: "set", user: "", token: f.newToken},
-		{kind: "set", user: f.account, token: f.oldAccount},
 		{kind: "set", user: "", token: f.oldActive},
+		{kind: "set", user: f.account, token: f.oldAccount},
 	}, f.provider.operations, "config failure used an unexpected provider transaction")
 	f.assertNoProviderReadAfterPreflightGets(t, "config failure performed a provider reread after mutation")
 	assert.Equal(t, f.beforeValues, maps.Clone(f.provider.values), "config failure did not restore the complete provider map")
@@ -342,8 +342,8 @@ func TestLoginSecureStorageAbsentActiveSlotConfigFailureDeletesCreatedSlot(t *te
 		{kind: "get", user: ""},
 		{kind: "set", user: f.account, token: f.newToken},
 		{kind: "set", user: "", token: f.newToken},
-		{kind: "set", user: f.account, token: f.oldAccount},
 		{kind: "delete", user: ""},
+		{kind: "set", user: f.account, token: f.oldAccount},
 	}, f.provider.operations, "absent active slot config failure used an unexpected provider transaction")
 	f.assertNoProviderReadAfterPreflightGets(t, "absent active slot config failure reread provider state after mutation")
 	assert.Equal(t, f.beforeValues, maps.Clone(f.provider.values), "config failure did not restore the provider map when active slot was originally absent")
@@ -379,8 +379,8 @@ func TestLoginSecureStorageAbsentActiveSlotRollbackFailuresAreClassifiedOnce(t *
 		{kind: "get", user: ""},
 		{kind: "set", user: f.account, token: f.newToken},
 		{kind: "set", user: "", token: f.newToken},
-		{kind: "set", user: f.account, token: f.oldAccount},
 		{kind: "delete", user: ""},
+		{kind: "set", user: f.account, token: f.oldAccount},
 	}, f.provider.operations, "rollback failures did not attempt each mutated provider slot exactly once")
 	f.assertNoProviderReadAfterPreflightGets(t, "rollback failures reread provider state")
 	f.assertConfigUnchanged(t, "rollback failures changed authentication config")

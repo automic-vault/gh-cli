@@ -272,13 +272,17 @@ func TestLoginSecureStorageRemovesOldInsecureConfigToken(t *testing.T) {
 func TestLoginSecureStorageWithErrorFailsClosed(t *testing.T) {
 	// Given a keyring that errors
 	authCfg := newTestAuthConfig(t)
-	keyring.MockInitWithError(errors.New("test-explosion"))
+	errSyntheticLoginSecureStorage := errors.New("synthetic-login-secure-storage-error")
+	keyring.MockInitWithError(errSyntheticLoginSecureStorage)
 
 	// When we login with secure storage
 	insecureStorageUsed, err := authCfg.Login("github.com", "test-user", "test-token", "", true)
 
-	// Then it returns the keyring error and does not write a plaintext fallback.
-	require.ErrorContains(t, err, "failed to store token in keyring: test-explosion")
+	// Then it returns a stable, classified Vault error and does not write a plaintext fallback.
+	require.EqualError(t, err, "Automic Vault credential resolution failed")
+	var resolutionErr *AutomicVaultCredentialResolutionError
+	require.ErrorAs(t, err, &resolutionErr)
+	require.ErrorIs(t, err, errSyntheticLoginSecureStorage)
 	require.False(t, insecureStorageUsed, "expected secure storage failure to fail closed")
 	requireNoKey(t, authCfg.cfg, []string{hostsKey, "github.com", oauthTokenKey})
 	requireNoKey(t, authCfg.cfg, []string{hostsKey, "github.com", usersKey, "test-user", oauthTokenKey})

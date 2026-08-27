@@ -27,8 +27,15 @@ type loginTransactionProvider struct {
 	getCalls    []string
 	setUsers    []string
 	deleteUsers []string
+	operations  []loginTransactionOperation
 	setHook     func(service, user, token string, call int) error
 	deleteHook  func(service, user string, call int) error
+}
+
+type loginTransactionOperation struct {
+	kind  string
+	user  string
+	token string
 }
 
 type loginConfigEntry struct {
@@ -46,6 +53,7 @@ func loginProviderKey(service, user string) string {
 
 func (p *loginTransactionProvider) get(service, user string) (string, error) {
 	p.getCalls = append(p.getCalls, user)
+	p.operations = append(p.operations, loginTransactionOperation{kind: "get", user: user})
 	token, ok := p.values[loginProviderKey(service, user)]
 	if !ok {
 		return "", keyring.ErrNotFound
@@ -55,6 +63,7 @@ func (p *loginTransactionProvider) get(service, user string) (string, error) {
 
 func (p *loginTransactionProvider) set(service, user, token string) error {
 	p.setUsers = append(p.setUsers, user)
+	p.operations = append(p.operations, loginTransactionOperation{kind: "set", user: user, token: token})
 	call := len(p.setUsers)
 	if p.setHook != nil {
 		if err := p.setHook(service, user, token, call); err != nil {
@@ -67,6 +76,7 @@ func (p *loginTransactionProvider) set(service, user, token string) error {
 
 func (p *loginTransactionProvider) delete(service, user string) error {
 	p.deleteUsers = append(p.deleteUsers, user)
+	p.operations = append(p.operations, loginTransactionOperation{kind: "delete", user: user})
 	call := len(p.deleteUsers)
 	if p.deleteHook != nil {
 		if err := p.deleteHook(service, user, call); err != nil {
@@ -221,6 +231,14 @@ func TestLoginSecureStorageConfigWriteFailureRestoresProviderAndMultiHostConfig(
 
 	_, err := authCfg.Login("github.com", "synthetic-login-new-account", "synthetic-login-new-token", "https", true)
 
+	assert.Equal(t, []loginTransactionOperation{
+		{kind: "get", user: "synthetic-login-new-account"},
+		{kind: "get", user: ""},
+		{kind: "set", user: "synthetic-login-new-account", token: "synthetic-login-new-token"},
+		{kind: "set", user: "", token: "synthetic-login-new-token"},
+		{kind: "set", user: "", token: "synthetic-login-hostwide-token"},
+		{kind: "delete", user: "synthetic-login-new-account"},
+	}, provider.operations, "config failure did not use inverse provider operation order")
 	assert.Equal(t, []string{"synthetic-login-new-account", "", ""}, provider.setUsers, "config failure did not restore the active provider slot")
 	assert.Equal(t, []string{"synthetic-login-new-account"}, provider.deleteUsers, "config failure did not remove the new account slot")
 	assertLoginTransactionStateUnchanged(t, authCfg, readConfigs, provider, beforeProvider, beforeKeys, beforeConfig, beforeBytes)
@@ -249,6 +267,14 @@ func TestLoginSecureStorageConfigAndProviderRollbackFailuresAreClassifiedOnce(t 
 
 	_, err := authCfg.Login("github.com", "synthetic-login-new-account", "synthetic-login-new-token", "https", true)
 
+	assert.Equal(t, []loginTransactionOperation{
+		{kind: "get", user: "synthetic-login-new-account"},
+		{kind: "get", user: ""},
+		{kind: "set", user: "synthetic-login-new-account", token: "synthetic-login-new-token"},
+		{kind: "set", user: "", token: "synthetic-login-new-token"},
+		{kind: "set", user: "", token: "synthetic-login-hostwide-token"},
+		{kind: "delete", user: "synthetic-login-new-account"},
+	}, provider.operations, "config and provider rollback did not attempt each inverse operation in LIFO order")
 	assert.Equal(t, []string{"synthetic-login-new-account", "", ""}, provider.setUsers, "config failure did not continue active-slot rollback")
 	assert.Equal(t, []string{"synthetic-login-new-account"}, provider.deleteUsers, "config failure did not continue account rollback")
 	assert.Equal(t, beforeKeys, mustConfigKeys(t, authCfg), "login host order changed despite provider rollback failures")
