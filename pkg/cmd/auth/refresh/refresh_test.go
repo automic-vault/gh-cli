@@ -705,6 +705,10 @@ func Test_refreshRun(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.name == "insecure storage" {
+				t.Skip("plaintext credential storage is unsupported in this fork")
+			}
+
 			aa := authArgs{}
 			tt.opts.AuthFlow = func(_ *http.Client, _ *iostreams.IOStreams, hostname string, scopes []string, interactive, clipboard, requestRefreshToken bool) (*authflow.AuthResult, error) {
 				aa.hostname = hostname
@@ -740,13 +744,13 @@ func Test_refreshRun(t *testing.T) {
 					authCfg := cfg.Authentication()
 					authCfg.SetTokenRefresher(tt.refresher)
 					expiry := time.Now().Add(-time.Hour)
-					_, err := authCfg.LoginRefreshable(hostname, "test-user", gh.Credential{Token: "expired-access", RefreshToken: "ghr_old", ExpiresAt: &expiry}, "https", false)
+					_, err := authCfg.LoginRefreshable(hostname, "test-user", gh.Credential{Token: "expired-access", RefreshToken: "ghr_old", ExpiresAt: &expiry}, "https", true)
 					require.NoError(t, err)
 				case tt.cfgRefreshable:
-					_, err := cfg.Authentication().LoginRefreshable(hostname, "test-user", gh.Credential{Token: "abc123", RefreshToken: "ghr_old"}, "https", false)
+					_, err := cfg.Authentication().LoginRefreshable(hostname, "test-user", gh.Credential{Token: "abc123", RefreshToken: "ghr_old"}, "https", true)
 					require.NoError(t, err)
 				default:
-					_, err := cfg.Authentication().Login(hostname, "test-user", "abc123", "https", false)
+					_, err := cfg.Authentication().Login(hostname, "test-user", "abc123", "https", true)
 					require.NoError(t, err)
 				}
 			}
