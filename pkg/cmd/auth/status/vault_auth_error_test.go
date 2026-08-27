@@ -16,6 +16,7 @@ import (
 )
 
 var errSyntheticVaultStatus = errors.New("synthetic Vault retrieval denied")
+var errSyntheticInactiveVaultStatus = errors.New("synthetic Vault retrieval denied for inactive account")
 
 type statusVaultAuthConfig struct {
 	*config.AuthConfig
@@ -145,13 +146,17 @@ func TestStatusRunOperationalVaultFailureJSONFailsClosed(t *testing.T) {
 		},
 	})
 
+	assert.Empty(t, stdout.String(), "operational Vault failure must not emit successful JSON")
+	assert.Equal(t, "github.com\n  X Vault retrieval unavailable.\n  - Active account: true\n", stderr.String())
+	assert.Equal(t, 0, transport.calls)
+	assert.Equal(t, 0, authCfg.legacyCalls)
+	assert.Equal(t, 1, authCfg.resolverCalls)
+	output := strings.ToLower(stdout.String() + stderr.String())
+	assert.NotContains(t, output, "undefined")
+	assert.NotContains(t, output, "synthetic-poison-token")
+	assert.NotContains(t, output, "synthetic-poison-source")
+	assert.NotContains(t, output, "synthetic-account")
 	require.ErrorIs(t, err, cmdutil.SilentError)
-	require.Empty(t, stdout.String(), "operational Vault failure must not emit successful JSON")
-	require.Equal(t, "github.com\n  X Vault retrieval unavailable.\n  - Active account: true\n", stderr.String())
-	require.Equal(t, 0, transport.calls)
-	require.Equal(t, 0, authCfg.legacyCalls)
-	require.Equal(t, 1, authCfg.resolverCalls)
-	require.NotContains(t, strings.ToLower(stdout.String()+stderr.String()), "undefined")
 }
 
 type statusValidAuthConfig struct {
@@ -263,19 +268,45 @@ func TestStatusRunOperationalVaultFailureCoversInactiveAccounts(t *testing.T) {
 		},
 	})
 
-	require.ErrorIs(t, err, cmdutil.SilentError)
-	require.Empty(t, stdout.String())
-	require.Equal(t, 0, transport.calls)
-	require.Equal(t, 0, multiAccountAuthCfg.legacyCalls)
-	require.Equal(t, 2, multiAccountAuthCfg.resolverCalls)
-	require.Equal(t, 2, strings.Count(stderr.String(), "Vault retrieval unavailable."))
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, 0, transport.calls, "all selected credential errors must be resolved before any HTTP request")
+	assert.Equal(t, 0, multiAccountAuthCfg.legacyCalls)
+	assert.Equal(t, 1, multiAccountAuthCfg.activeResolverCalls)
+	assert.Equal(t, 1, multiAccountAuthCfg.perUserCalls)
+	assert.Equal(t, "github.com", multiAccountAuthCfg.activeResolverHost)
+	assert.Equal(t, "github.com", multiAccountAuthCfg.perUserHost)
+	assert.Equal(t, "synthetic-secondary-account", multiAccountAuthCfg.perUser)
+	assert.Equal(t, "github.com\n  X Vault retrieval unavailable.\n  - Active account: true\n", stderr.String())
 	output := strings.ToLower(stdout.String() + stderr.String())
-	require.NotContains(t, output, "invalid")
-	require.NotContains(t, output, "login")
+	assert.NotContains(t, output, "invalid")
+	assert.NotContains(t, output, "login")
+	assert.NotContains(t, output, "synthetic-poison-token")
+	assert.NotContains(t, output, "synthetic-poison-source")
+	assert.NotContains(t, output, "synthetic-account")
+	assert.NotContains(t, output, "synthetic-secondary-account")
+	require.ErrorIs(t, err, cmdutil.SilentError)
 }
 
 type multiAccountStatusVaultAuthConfig struct {
 	*statusVaultAuthConfig
+	activeResolverCalls int
+	activeResolverHost  string
+	perUserCalls        int
+	perUserHost         string
+	perUser             string
+}
+
+func (c *multiAccountStatusVaultAuthConfig) ActiveTokenWithError(hostname string) (string, string, error) {
+	c.activeResolverCalls++
+	c.activeResolverHost = hostname
+	return "synthetic-poison-token", "synthetic-poison-source", errSyntheticVaultStatus
+}
+
+func (c *multiAccountStatusVaultAuthConfig) TokenForUser(hostname, username string) (string, string, error) {
+	c.perUserCalls++
+	c.perUserHost = hostname
+	c.perUser = username
+	return "synthetic-poison-token", "synthetic-poison-source", errSyntheticInactiveVaultStatus
 }
 
 func (c *multiAccountStatusVaultAuthConfig) UsersForHost(string) []string {

@@ -60,13 +60,15 @@ func (c *retryingWatcherTokenConfig) ActiveTokenWithError(string) (string, strin
 }
 
 type watcherRecoveryRoundTripper struct {
-	calls        int
-	runResponses int
-	unexpected   []string
+	calls          int
+	runResponses   int
+	authorizations []string
+	unexpected     []string
 }
 
 func (t *watcherRecoveryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.calls++
+	t.authorizations = append(t.authorizations, req.Header.Get("Authorization"))
 	var body string
 	switch {
 	case req.URL.Path == "/repos/OWNER/REPO/actions/runs/2":
@@ -216,6 +218,14 @@ func TestWatchRunRetriesAfterAFreshInvocationFollowingVaultFailure(t *testing.T)
 	}
 	if len(transport.unexpected) != 0 {
 		t.Errorf("expected no unexpected watcher endpoints, got %v", transport.unexpected)
+	}
+	if len(transport.authorizations) != 6 {
+		t.Errorf("expected one recovered Authorization header for each of six requests, got %d", len(transport.authorizations))
+	}
+	for i, authorization := range transport.authorizations {
+		if authorization != "token synthetic-recovered-token" {
+			t.Errorf("recovered request %d used unexpected Authorization %q", i+1, authorization)
+		}
 	}
 	if resolver.legacyCalls != 0 {
 		t.Errorf("expected zero legacy resolver calls across failure and recovery, got %d", resolver.legacyCalls)
