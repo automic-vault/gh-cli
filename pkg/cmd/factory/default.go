@@ -200,8 +200,9 @@ func HttpClientFunc(cfgFunc func() (gh.Config, error), ios *iostreams.IOStreams,
 		if err != nil {
 			return nil, err
 		}
+		authConfig := cfg.Authentication()
 		opts := api.HTTPClientOptions{
-			RefreshingConfig:  cfg.Authentication(),
+			RefreshingConfig:  authConfig,
 			Log:               ios.ErrOut,
 			LogColorize:       ios.ColorEnabled(),
 			AppVersion:        appVersion,
