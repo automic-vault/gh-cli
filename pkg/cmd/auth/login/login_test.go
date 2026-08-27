@@ -711,9 +711,8 @@ func Test_loginRun_Survey(t *testing.T) {
 		{
 			name: "given we log in as a user that is already in the config, we get an informational message",
 			opts: &LoginOptions{
-				Hostname:        "github.com",
-				Interactive:     true,
-				InsecureStorage: true,
+				Hostname:    "github.com",
+				Interactive: true,
 			},
 			prompterStubs: func(pm *prompter.PrompterMock) {
 				pm.SelectFunc = func(prompt, _ string, opts []string) (int, error) {
@@ -727,7 +726,7 @@ func Test_loginRun_Survey(t *testing.T) {
 				}
 			},
 			cfgStubs: func(t *testing.T, c gh.Config) {
-				_, err := c.Authentication().Login("github.com", "monalisa", "abc123", "https", false)
+				_, err := c.Authentication().Login("github.com", "monalisa", "abc123", "https", true)
 				require.NoError(t, err)
 			},
 			runStubs: func(rs *run.CommandStubber) {
@@ -742,14 +741,13 @@ func Test_loginRun_Survey(t *testing.T) {
 			},
 			wantHosts: heredoc.Doc(`
             github.com:
+                git_protocol: https
                 users:
                     monalisa:
-                        oauth_token: def456
-                git_protocol: https
                 user: monalisa
-                oauth_token: def456
             `),
-			wantErrOut: regexp.MustCompile(`! You were already logged in to this account`),
+			wantErrOut:      regexp.MustCompile(`! You were already logged in to this account`),
+			wantSecureToken: "def456",
 		},
 	}
 
