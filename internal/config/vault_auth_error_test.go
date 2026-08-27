@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/cli/cli/v2/internal/keyring"
+	ghConfig "github.com/cli/go-gh/v2/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,6 +16,16 @@ type activeTokenWithError interface {
 
 var errMissingActiveTokenWithError = errors.New("ActiveTokenWithError is not implemented")
 var errSyntheticVaultDenied = errors.New("synthetic Vault access denied")
+
+// vaultCredentialResolutionError is the runtime contract for the production
+// error type. Keeping this as an interface lets the RED suite compile before
+// internal/config exports its concrete type while still requiring errors.As
+// classification and an errors.Is-preserving Unwrap method.
+type vaultCredentialResolutionError interface {
+	error
+	Unwrap() error
+	IsAutomicVaultCredentialResolution() bool
+}
 
 func callActiveTokenWithError(t *testing.T, authCfg *AuthConfig, hostname string) (string, string, error) {
 	t.Helper()
@@ -43,6 +54,29 @@ func TestActiveTokenWithErrorOperationalAccountFailureDoesNotUseLegacyCredential
 	require.ErrorIs(t, err, errSyntheticVaultDenied)
 }
 
+func TestActiveTokenWithErrorClassifiesOperationalFailureAsAutomicVaultError(t *testing.T) {
+	authCfg := newTestAuthConfig(t)
+	hostname := "github.com"
+	authCfg.cfg.Set([]string{hostsKey, hostname, userKey}, "synthetic-account")
+	keyring.MockInitWithError(errSyntheticVaultDenied)
+	t.Cleanup(keyring.MockInit)
+
+	token, source, err := callActiveTokenWithError(t, authCfg, hostname)
+
+	// Keep the safety assertions before the classification checks so this test
+	// also proves an operational failure cannot return credential material.
+	require.Empty(t, token)
+	require.Empty(t, source)
+	require.Error(t, err)
+	var classified vaultCredentialResolutionError
+	require.ErrorAs(t, err, &classified)
+	require.True(t, classified.IsAutomicVaultCredentialResolution())
+	require.Equal(t, "Automic Vault credential resolution failed", classified.Error())
+	require.ErrorIs(t, err, errSyntheticVaultDenied)
+	require.NotContains(t, err.Error(), "synthetic-account")
+	require.NotContains(t, err.Error(), "synthetic-poison-token")
+}
+
 func TestActiveTokenWithErrorAllowsLegacyOnlyForAccountNotFound(t *testing.T) {
 	authCfg := newTestAuthConfig(t)
 	hostname := "github.com"
@@ -66,6 +100,39 @@ func TestActiveTokenWithErrorAllowsAnonymousUseWhenBothSlotsAreNotFound(t *testi
 	require.NoError(t, err)
 	require.Empty(t, token)
 	require.Empty(t, source)
+}
+
+func TestActiveTokenWithErrorUsesHostWideCompatibilityWhenActiveUserIsAbsent(t *testing.T) {
+	authCfg := newTestAuthConfig(t)
+	hostname := "github.com"
+	require.NoError(t, keyring.Set(keyringServiceName(hostname), "", "synthetic-hostwide-token"))
+
+	// ghConfig.Config.Get currently exposes only KeyNotFoundError for this
+	// lookup. A non-KeyNotFound ActiveUser error needs a narrow production
+	// lookup seam before it can be exercised without unsafe monkey-patching or
+	// a test that merely reimplements ActiveTokenWithError.
+	_, activeUserErr := authCfg.ActiveUser(hostname)
+	var keyNotFoundError *ghConfig.KeyNotFoundError
+	require.ErrorAs(t, activeUserErr, &keyNotFoundError)
+
+	token, source, err := callActiveTokenWithError(t, authCfg, hostname)
+
+	require.NoError(t, err)
+	require.Equal(t, "synthetic-hostwide-token", token)
+	require.Equal(t, "keyring", source)
+}
+
+func TestActiveTokenWithErrorUsesHostWideCompatibilityWhenActiveUserIsEmpty(t *testing.T) {
+	authCfg := newTestAuthConfig(t)
+	hostname := "github.com"
+	authCfg.cfg.Set([]string{hostsKey, hostname, userKey}, "")
+	require.NoError(t, keyring.Set(keyringServiceName(hostname), "", "synthetic-hostwide-token"))
+
+	token, source, err := callActiveTokenWithError(t, authCfg, hostname)
+
+	require.NoError(t, err)
+	require.Equal(t, "synthetic-hostwide-token", token)
+	require.Equal(t, "keyring", source)
 }
 
 func TestActiveTokenWithErrorHonorsSetActiveTokenOverride(t *testing.T) {

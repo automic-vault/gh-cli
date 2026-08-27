@@ -6,6 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	ghconfig "github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/internal/keyring"
+	"github.com/stretchr/testify/require"
 )
 
 var errSyntheticVaultDenied = errors.New("synthetic Vault access denied")
@@ -258,4 +262,35 @@ func TestAddAuthTokenHeaderPreservesProviderHTTP401AfterSuccessfulResolution(t *
 	if cfg.resolverCalls != 1 {
 		t.Errorf("expected one error-aware resolver call for a successful provider result, got %d", cfg.resolverCalls)
 	}
+}
+
+type automicVaultCredentialResolutionError interface {
+	error
+	Unwrap() error
+	IsAutomicVaultCredentialResolution() bool
+}
+
+func TestAddAuthTokenHeaderPropagatesClassifiedVaultErrorWithoutTransport(t *testing.T) {
+	isolated, _ := ghconfig.NewIsolatedTestConfig(t, "hosts:\n  github.com:\n    user: synthetic-account\n")
+	authCfg := isolated.Authentication()
+	keyring.MockInitWithError(errSyntheticVaultDenied)
+	t.Cleanup(keyring.MockInit)
+	transport := &countingRoundTripper{}
+	req := httptest.NewRequest(http.MethodGet, "https://api.github.com/user", nil)
+
+	res, err := AddAuthTokenHeader(transport, authCfg).RoundTrip(req)
+
+	// Verify the transport boundary before checking the type contract: an
+	// operational provider failure must not become an HTTP response.
+	if res != nil {
+		t.Fatalf("expected no HTTP response after local Vault failure, got status %d", res.StatusCode)
+	}
+	if transport.calls != 0 {
+		t.Fatalf("expected zero network requests after local Vault failure, got %d", transport.calls)
+	}
+	var classified automicVaultCredentialResolutionError
+	require.ErrorAs(t, err, &classified)
+	require.True(t, classified.IsAutomicVaultCredentialResolution())
+	require.Equal(t, "Automic Vault credential resolution failed", classified.Error())
+	require.ErrorIs(t, err, errSyntheticVaultDenied)
 }
