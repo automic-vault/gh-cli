@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cli/cli/v2/internal/keyring"
@@ -20,6 +22,8 @@ var errMissingActiveTokenWithError = errors.New("ActiveTokenWithError is not imp
 var errSyntheticVaultDenied = errors.New("synthetic Vault access denied")
 var errSyntheticTokenForUserVaultDenied = errors.New("synthetic Vault access denied for selected account")
 var errSyntheticLogoutDeleteDenied = errors.New("synthetic Vault delete denied")
+var errSyntheticLogoutNextGetDenied = errors.New("synthetic Vault read denied for next account")
+var errSyntheticLogoutActiveSetDenied = errors.New("synthetic Vault active-slot write denied")
 
 // vaultCredentialResolutionError is the runtime contract for the production
 // error type. Keeping this as an interface lets the RED suite compile before
@@ -197,6 +201,16 @@ func snapshotHostsConfig(t *testing.T, readConfigs func(io.Writer, io.Writer)) [
 	return append([]byte(nil), hosts.Bytes()...)
 }
 
+func requireSyntheticStringSlice(t *testing.T, want, got []string, message string) {
+	t.Helper()
+	require.True(t, slices.Equal(want, got), message)
+}
+
+func requireSyntheticString(t *testing.T, want, got, message string) {
+	t.Helper()
+	require.True(t, want == got, message)
+}
+
 func TestLogoutPreservesStateWhenKeyringDeleteFails(t *testing.T) {
 	cfg, readConfigs := NewIsolatedTestConfig(t, "")
 	authCfg := cfg.Authentication().(*AuthConfig)
@@ -226,14 +240,14 @@ func TestLogoutPreservesStateWhenKeyringDeleteFails(t *testing.T) {
 	// account state may change before the delete succeeds.
 	afterHosts := snapshotHostsConfig(t, readConfigs)
 	require.True(t, bytes.Equal(beforeHosts, afterHosts), "persisted authentication state changed")
-	require.Equal(t, []string{username}, authCfg.UsersForHost(hostname))
+	requireSyntheticStringSlice(t, []string{username}, authCfg.UsersForHost(hostname), "account list changed")
 	activeUser, activeUserErr := authCfg.ActiveUser(hostname)
 	require.NoError(t, activeUserErr)
-	require.Equal(t, username, activeUser)
-	require.Equal(t, []string{"", username}, deleteCalls)
+	requireSyntheticString(t, username, activeUser, "active account changed")
+	requireSyntheticStringSlice(t, []string{"", username}, deleteCalls, "keyring delete sequence changed")
 	if err != nil {
-		require.NotContains(t, err.Error(), "synthetic-logout-token")
-		require.NotContains(t, err.Error(), username)
+		require.True(t, !strings.Contains(err.Error(), "synthetic-logout-token"), "error contains credential material")
+		require.True(t, !strings.Contains(err.Error(), username), "error contains account material")
 	}
 	require.Error(t, err)
 	require.ErrorIs(t, err, errSyntheticLogoutDeleteDenied)
@@ -266,13 +280,13 @@ func TestLogoutPreservesStateWhenActiveAccountSwitchDeleteFails(t *testing.T) {
 
 	afterHosts := snapshotHostsConfig(t, readConfigs)
 	require.True(t, bytes.Equal(beforeHosts, afterHosts), "persisted authentication state changed")
-	require.Equal(t, []string{nextUser, activeUser}, authCfg.UsersForHost(hostname))
+	requireSyntheticStringSlice(t, []string{nextUser, activeUser}, authCfg.UsersForHost(hostname), "account list changed")
 	currentUser, currentUserErr := authCfg.ActiveUser(hostname)
 	require.NoError(t, currentUserErr)
-	require.Equal(t, activeUser, currentUser)
+	requireSyntheticString(t, activeUser, currentUser, "active account changed")
 	if err != nil {
-		require.NotContains(t, err.Error(), "synthetic-active-token")
-		require.NotContains(t, err.Error(), activeUser)
+		require.True(t, !strings.Contains(err.Error(), "synthetic-active-token"), "error contains credential material")
+		require.True(t, !strings.Contains(err.Error(), activeUser), "error contains account material")
 	}
 	require.Error(t, err)
 	require.ErrorIs(t, err, errSyntheticLogoutDeleteDenied)
@@ -294,4 +308,121 @@ func TestLogoutTreatsKeyringDeleteNotFoundAsCompatible(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, authCfg.UsersForHost(hostname))
 	require.Equal(t, []byte("{}\n"), snapshotHostsConfig(t, readConfigs))
+}
+
+func TestLogoutDeletesInactiveAccountBeforeConfigMutation(t *testing.T) {
+	cfg, readConfigs := NewIsolatedTestConfig(t, "")
+	authCfg := cfg.Authentication().(*AuthConfig)
+	const hostname = "github.com"
+	const inactiveUser = "synthetic-inactive-account"
+	const activeUser = "synthetic-active-account"
+	_, err := authCfg.Login(hostname, inactiveUser, "synthetic-inactive-token", "https", true)
+	require.NoError(t, err)
+	_, err = authCfg.Login(hostname, activeUser, "synthetic-active-token", "https", true)
+	require.NoError(t, err)
+
+	beforeHosts := snapshotHostsConfig(t, readConfigs)
+	var deleteCalls []string
+	authCfg.keyringDelete = func(_, user string) error {
+		deleteCalls = append(deleteCalls, user)
+		if user == inactiveUser {
+			return errSyntheticLogoutDeleteDenied
+		}
+		return nil
+	}
+
+	err = authCfg.Logout(hostname, inactiveUser)
+
+	afterHosts := snapshotHostsConfig(t, readConfigs)
+	require.True(t, bytes.Equal(beforeHosts, afterHosts), "persisted authentication state changed")
+	requireSyntheticStringSlice(t, []string{inactiveUser}, deleteCalls, "inactive account delete was not attempted")
+	requireSyntheticStringSlice(t, []string{inactiveUser, activeUser}, authCfg.UsersForHost(hostname), "account list changed")
+	currentUser, currentUserErr := authCfg.ActiveUser(hostname)
+	require.NoError(t, currentUserErr)
+	requireSyntheticString(t, activeUser, currentUser, "active account changed")
+	if err != nil {
+		require.True(t, !strings.Contains(err.Error(), inactiveUser), "error contains account material")
+	}
+	require.Error(t, err)
+	require.ErrorIs(t, err, errSyntheticLogoutDeleteDenied)
+}
+
+func TestLogoutPreservesStateWhenNextAccountKeyringReadFails(t *testing.T) {
+	cfg, readConfigs := NewIsolatedTestConfig(t, "")
+	authCfg := cfg.Authentication().(*AuthConfig)
+	const hostname = "github.com"
+	const activeUser = "synthetic-active-account"
+	const nextUser = "synthetic-next-account"
+	_, err := authCfg.Login(hostname, nextUser, "synthetic-next-token", "https", true)
+	require.NoError(t, err)
+	_, err = authCfg.Login(hostname, activeUser, "synthetic-active-token", "https", true)
+	require.NoError(t, err)
+
+	beforeHosts := snapshotHostsConfig(t, readConfigs)
+	var getCalls []string
+	authCfg.keyringGet = func(service, user string) (string, error) {
+		getCalls = append(getCalls, user)
+		if user == nextUser {
+			return "", errSyntheticLogoutNextGetDenied
+		}
+		return keyring.Get(service, user)
+	}
+
+	err = authCfg.Logout(hostname, activeUser)
+
+	afterHosts := snapshotHostsConfig(t, readConfigs)
+	require.True(t, bytes.Equal(beforeHosts, afterHosts), "persisted authentication state changed")
+	requireSyntheticStringSlice(t, []string{nextUser}, getCalls, "next-account keyring read sequence changed")
+	requireSyntheticStringSlice(t, []string{nextUser, activeUser}, authCfg.UsersForHost(hostname), "account list changed")
+	currentUser, currentUserErr := authCfg.ActiveUser(hostname)
+	require.NoError(t, currentUserErr)
+	requireSyntheticString(t, activeUser, currentUser, "active account changed")
+	if err != nil {
+		require.True(t, !strings.Contains(err.Error(), activeUser), "error contains account material")
+	}
+	require.Error(t, err)
+	require.ErrorIs(t, err, errSyntheticLogoutNextGetDenied)
+}
+
+func TestLogoutPreservesStateWhenNextAccountActiveSlotWriteFails(t *testing.T) {
+	cfg, readConfigs := NewIsolatedTestConfig(t, "")
+	authCfg := cfg.Authentication().(*AuthConfig)
+	const hostname = "github.com"
+	const activeUser = "synthetic-active-account"
+	const nextUser = "synthetic-next-account"
+	_, err := authCfg.Login(hostname, nextUser, "synthetic-next-token", "https", true)
+	require.NoError(t, err)
+	_, err = authCfg.Login(hostname, activeUser, "synthetic-active-token", "https", true)
+	require.NoError(t, err)
+
+	beforeHosts := snapshotHostsConfig(t, readConfigs)
+	var getCalls []string
+	var setCalls []string
+	authCfg.keyringGet = func(service, user string) (string, error) {
+		getCalls = append(getCalls, user)
+		return keyring.Get(service, user)
+	}
+	authCfg.keyringSet = func(_, user, _ string) error {
+		setCalls = append(setCalls, user)
+		if user == "" {
+			return errSyntheticLogoutActiveSetDenied
+		}
+		return nil
+	}
+
+	err = authCfg.Logout(hostname, activeUser)
+
+	afterHosts := snapshotHostsConfig(t, readConfigs)
+	require.True(t, bytes.Equal(beforeHosts, afterHosts), "persisted authentication state changed")
+	requireSyntheticStringSlice(t, []string{nextUser}, getCalls, "next-account keyring read sequence changed")
+	requireSyntheticStringSlice(t, []string{""}, setCalls, "active-slot keyring write sequence changed")
+	requireSyntheticStringSlice(t, []string{nextUser, activeUser}, authCfg.UsersForHost(hostname), "account list changed")
+	currentUser, currentUserErr := authCfg.ActiveUser(hostname)
+	require.NoError(t, currentUserErr)
+	requireSyntheticString(t, activeUser, currentUser, "active account changed")
+	if err != nil {
+		require.True(t, !strings.Contains(err.Error(), activeUser), "error contains account material")
+	}
+	require.Error(t, err)
+	require.ErrorIs(t, err, errSyntheticLogoutActiveSetDenied)
 }
