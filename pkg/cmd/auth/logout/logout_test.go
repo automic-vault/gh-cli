@@ -160,8 +160,9 @@ func Test_logoutRun_tty(t *testing.T) {
 			wantErrOut:  regexp.MustCompile(`Logged out of github.com account monalisa`),
 		},
 		{
-			name: "logs out prompted user when multiple known hosts with multiple users each",
-			opts: &LogoutOptions{},
+			name:          "logs out prompted user when multiple known hosts with multiple users each",
+			secureStorage: true,
+			opts:          &LogoutOptions{},
 			cfgHosts: []hostUsers{
 				{"ghe.io", []user{
 					{"monalisa-ghe", "abc123"},
@@ -178,7 +179,7 @@ func Test_logoutRun_tty(t *testing.T) {
 				}
 			},
 			assertToken: hasActiveToken("github.com", "monalisa2-token"),
-			wantHosts:   "ghe.io:\n    users:\n        monalisa-ghe:\n            oauth_token: abc123\n        monalisa-ghe2:\n            oauth_token: abc123\n    git_protocol: ssh\n    user: monalisa-ghe2\n    oauth_token: abc123\ngithub.com:\n    users:\n        monalisa2:\n            oauth_token: monalisa2-token\n    git_protocol: ssh\n    user: monalisa2\n    oauth_token: monalisa2-token\n",
+			wantHosts:   "ghe.io:\n    git_protocol: ssh\n    users:\n        monalisa-ghe:\n        monalisa-ghe2:\n    user: monalisa-ghe2\ngithub.com:\n    git_protocol: ssh\n    users:\n        monalisa2:\n    user: monalisa2\n",
 			wantErrOut:  regexp.MustCompile(`Logged out of github.com account monalisa`),
 		},
 		{
@@ -194,8 +195,9 @@ func Test_logoutRun_tty(t *testing.T) {
 			wantErrOut:  regexp.MustCompile(`Logged out of github.com account monalisa`),
 		},
 		{
-			name: "logs out prompted user when one known host with multiple users",
-			opts: &LogoutOptions{},
+			name:          "logs out prompted user when one known host with multiple users",
+			secureStorage: true,
+			opts:          &LogoutOptions{},
 			cfgHosts: []hostUsers{
 				{"github.com", []user{
 					{"monalisa", "monalisa-token"},
@@ -207,7 +209,7 @@ func Test_logoutRun_tty(t *testing.T) {
 					return prompter.IndexFor(opts, "monalisa (github.com)")
 				}
 			},
-			wantHosts:   "github.com:\n    users:\n        monalisa2:\n            oauth_token: monalisa2-token\n    git_protocol: ssh\n    user: monalisa2\n    oauth_token: monalisa2-token\n",
+			wantHosts:   "github.com:\n    git_protocol: ssh\n    users:\n        monalisa2:\n    user: monalisa2\n",
 			assertToken: hasActiveToken("github.com", "monalisa2-token"),
 			wantErrOut:  regexp.MustCompile(`Logged out of github.com account monalisa`),
 		},
@@ -292,7 +294,8 @@ func Test_logoutRun_tty(t *testing.T) {
 			wantErr: "no accounts matched that criteria",
 		},
 		{
-			name: "switches user if there is another one available",
+			name:          "switches user if there is another one available",
+			secureStorage: true,
 			opts: &LogoutOptions{
 				Hostname: "github.com",
 				Username: "monalisa2",
@@ -303,7 +306,7 @@ func Test_logoutRun_tty(t *testing.T) {
 					{"monalisa2", "monalisa2-token"},
 				}},
 			},
-			wantHosts:   "github.com:\n    users:\n        monalisa:\n            oauth_token: monalisa-token\n    git_protocol: ssh\n    user: monalisa\n    oauth_token: monalisa-token\n",
+			wantHosts:   "github.com:\n    git_protocol: ssh\n    users:\n        monalisa:\n    user: monalisa\n",
 			assertToken: hasActiveToken("github.com", "monalisa-token"),
 			wantErrOut:  regexp.MustCompile("✓ Switched active account for github.com to monalisa"),
 		},
@@ -487,7 +490,8 @@ func Test_logoutRun_nontty(t *testing.T) {
 			wantErr: "unable to determine which account to log out of, please specify `--hostname` and `--user`",
 		},
 		{
-			name: "switches user if there is another one available",
+			name:          "switches user if there is another one available",
+			secureStorage: true,
 			opts: &LogoutOptions{
 				Hostname: "github.com",
 				Username: "monalisa2",
@@ -498,7 +502,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 					{"monalisa2", "monalisa2-token"},
 				}},
 			},
-			wantHosts:   "github.com:\n    users:\n        monalisa:\n            oauth_token: monalisa-token\n    git_protocol: ssh\n    user: monalisa\n    oauth_token: monalisa-token\n",
+			wantHosts:   "github.com:\n    git_protocol: ssh\n    users:\n        monalisa:\n    user: monalisa\n",
 			assertToken: hasActiveToken("github.com", "monalisa-token"),
 			wantErrOut:  regexp.MustCompile("✓ Switched active account for github.com to monalisa"),
 		},
