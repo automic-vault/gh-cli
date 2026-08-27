@@ -18,6 +18,33 @@ import (
 var errSyntheticVaultStatus = errors.New("synthetic Vault retrieval denied")
 var errSyntheticInactiveVaultStatus = errors.New("synthetic Vault retrieval denied for inactive account")
 var errSyntheticExcludedVaultStatus = errors.New("synthetic Vault retrieval denied for excluded host")
+var errSyntheticInactiveStatusNotFound = errors.New("synthetic inactive credential not found")
+
+type markedStatusVaultError struct {
+	cause error
+}
+
+func (e *markedStatusVaultError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *markedStatusVaultError) Unwrap() error {
+	return e.cause
+}
+
+func (*markedStatusVaultError) IsAutomicVaultCredentialResolution() bool {
+	return true
+}
+
+func markStatusVaultError(cause error) error {
+	return &markedStatusVaultError{cause: cause}
+}
+
+type statusVaultResolutionMarker interface {
+	IsAutomicVaultCredentialResolution() bool
+}
+
+var _ statusVaultResolutionMarker = (*markedStatusVaultError)(nil)
 
 type statusResolutionCall struct {
 	kind     string
@@ -47,7 +74,7 @@ func (c *statusVaultAuthConfig) ActiveToken(hostname string) (string, string) {
 func (c *statusVaultAuthConfig) ActiveTokenWithError(hostname string) (string, string, error) {
 	c.resolverCalls++
 	c.resolution = append(c.resolution, statusResolutionCall{kind: "active", hostname: hostname})
-	return "synthetic-poison-token", "synthetic-poison-source", errSyntheticVaultStatus
+	return "synthetic-poison-token", "synthetic-poison-source", markStatusVaultError(errSyntheticVaultStatus)
 }
 
 func (c *statusVaultAuthConfig) ActiveUser(string) (string, error) {
@@ -340,7 +367,7 @@ func (c *multiAccountStatusVaultAuthConfig) TokenForUser(hostname, username stri
 	c.perUserHost = hostname
 	c.perUser = username
 	c.resolution = append(c.resolution, statusResolutionCall{kind: "inactive", hostname: hostname, username: username})
-	return "synthetic-poison-token", "synthetic-poison-source", errSyntheticInactiveVaultStatus
+	return "synthetic-poison-token", "synthetic-poison-source", markStatusVaultError(errSyntheticInactiveVaultStatus)
 }
 
 func (c *multiAccountStatusVaultAuthConfig) UsersForHost(string) []string {
@@ -415,7 +442,7 @@ func (c *orderedStatusAuthConfig) TokenForUser(hostname, username string) (strin
 	case hostname == "alpha.example.com" && username == "synthetic-alpha-inactive-account":
 		return "synthetic-alpha-inactive-token", "synthetic-alpha-source", nil
 	case hostname == "github.com" && username == "synthetic-github-inactive-account":
-		return "synthetic-github-inactive-poison-token", "synthetic-github-inactive-poison-source", errSyntheticInactiveVaultStatus
+		return "synthetic-github-inactive-poison-token", "synthetic-github-inactive-poison-source", markStatusVaultError(errSyntheticInactiveVaultStatus)
 	case hostname == "zulu.example.com" && username == "synthetic-zulu-inactive-account":
 		return "synthetic-zulu-inactive-token", "synthetic-zulu-source", nil
 	default:
@@ -701,6 +728,119 @@ func TestStatusRunErrorAwareAbsenceRetainsProvider401Behavior(t *testing.T) {
 	assert.Equal(t, "token ", transport.authorization)
 }
 
+type inactiveAbsenceStatusAuthConfig struct {
+	*config.AuthConfig
+	legacyCalls   int
+	resolverCalls int
+	inactiveCalls int
+	resolution    []statusResolutionCall
+}
+
+var _ gh.AuthConfig = (*inactiveAbsenceStatusAuthConfig)(nil)
+
+func (c *inactiveAbsenceStatusAuthConfig) Hosts() []string {
+	return []string{"github.com"}
+}
+
+func (c *inactiveAbsenceStatusAuthConfig) ActiveToken(string) (string, string) {
+	c.legacyCalls++
+	return "synthetic-inactive-absence-poison-token", "synthetic-inactive-absence-poison-source"
+}
+
+func (c *inactiveAbsenceStatusAuthConfig) ActiveTokenWithError(hostname string) (string, string, error) {
+	c.resolverCalls++
+	c.resolution = append(c.resolution, statusResolutionCall{kind: "active", hostname: hostname})
+	return "synthetic-inactive-absence-active-token", "synthetic-inactive-absence-source", nil
+}
+
+func (c *inactiveAbsenceStatusAuthConfig) ActiveUser(string) (string, error) {
+	return "synthetic-inactive-absence-active-account", nil
+}
+
+func (c *inactiveAbsenceStatusAuthConfig) UsersForHost(string) []string {
+	return []string{"synthetic-inactive-absence-account"}
+}
+
+func (c *inactiveAbsenceStatusAuthConfig) TokenForUser(hostname, username string) (string, string, error) {
+	c.inactiveCalls++
+	c.resolution = append(c.resolution, statusResolutionCall{kind: "inactive", hostname: hostname, username: username})
+	return "", "", errSyntheticInactiveStatusNotFound
+}
+
+type statusActiveThenUnauthorizedTransport struct {
+	calls          int
+	authorizations []string
+}
+
+func (t *statusActiveThenUnauthorizedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.calls++
+	t.authorizations = append(t.authorizations, req.Header.Get("Authorization"))
+	statusCode := http.StatusUnauthorized
+	if t.calls == 1 {
+		statusCode = http.StatusOK
+	}
+	return &http.Response{
+		StatusCode: statusCode,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    req,
+	}, nil
+}
+
+func TestStatusRunInactiveCredentialAbsenceRetainsInvalidCredentialBehavior(t *testing.T) {
+	authCfg := &inactiveAbsenceStatusAuthConfig{AuthConfig: &config.AuthConfig{}}
+	mockConfig := config.NewMockConfigFromString("")
+	mockConfig.AuthenticationFunc = func() gh.AuthConfig {
+		return authCfg
+	}
+	mockConfig.GitProtocolFunc = func(string) gh.ConfigEntry {
+		return gh.ConfigEntry{Value: "https"}
+	}
+
+	transport := &statusActiveThenUnauthorizedTransport{}
+	ios, _, stdout, stderr := iostreams.Test()
+	httpClientCalls := 0
+	err := statusRun(&StatusOptions{
+		IO: ios,
+		Config: func() (gh.Config, error) {
+			return mockConfig, nil
+		},
+		HttpClient: func() (*http.Client, error) {
+			httpClientCalls++
+			return &http.Client{Transport: transport}, nil
+		},
+	})
+
+	output := strings.ToLower(stdout.String() + stderr.String())
+	require.ErrorIs(t, err, cmdutil.SilentError)
+	assert.Empty(t, stdout.String())
+	assert.Contains(t, output, "synthetic-inactive-absence-active-account")
+	assert.Contains(t, output, "synthetic-inactive-absence-account")
+	assert.Contains(t, output, "active account: false")
+	assert.Contains(t, output, "invalid")
+	assert.Contains(t, output, "re-authenticate")
+	assert.Contains(t, output, "gh auth login")
+	for _, forbidden := range []string{
+		"vault",
+		"retrieval",
+		"synthetic-inactive-absence-poison-token",
+		"synthetic-inactive-absence-poison-source",
+		"undefined",
+	} {
+		assert.NotContains(t, output, forbidden)
+	}
+	assert.Equal(t, []statusResolutionCall{
+		{kind: "active", hostname: "github.com"},
+		{kind: "inactive", hostname: "github.com", username: "synthetic-inactive-absence-account"},
+	}, authCfg.resolution)
+	assert.Equal(t, 1, authCfg.resolverCalls)
+	assert.Equal(t, 1, authCfg.inactiveCalls)
+	assert.Equal(t, 0, authCfg.legacyCalls)
+	assert.Equal(t, 1, httpClientCalls)
+	assert.Equal(t, 2, transport.calls)
+	assert.Equal(t, []string{"token synthetic-inactive-absence-active-token", "token "}, transport.authorizations)
+}
+
 type filterStatusAuthConfig struct {
 	*config.AuthConfig
 	legacyCalls       int
@@ -728,7 +868,7 @@ func (c *filterStatusAuthConfig) ActiveTokenWithError(hostname string) (string, 
 	c.resolverCalls++
 	c.resolution = append(c.resolution, statusResolutionCall{kind: "active", hostname: hostname})
 	if hostname == c.activeErrorHost {
-		return "synthetic-filter-active-poison-token", "synthetic-filter-active-poison-source", errSyntheticExcludedVaultStatus
+		return "synthetic-filter-active-poison-token", "synthetic-filter-active-poison-source", markStatusVaultError(errSyntheticExcludedVaultStatus)
 	}
 	return "synthetic-filter-active-token", "synthetic-filter-source", nil
 }
@@ -745,7 +885,7 @@ func (c *filterStatusAuthConfig) TokenForUser(hostname, username string) (string
 	c.inactiveCalls++
 	c.resolution = append(c.resolution, statusResolutionCall{kind: "inactive", hostname: hostname, username: username})
 	if hostname == c.inactiveErrorHost {
-		return "synthetic-filter-inactive-poison-token", "synthetic-filter-inactive-poison-source", c.ignoredError
+		return "synthetic-filter-inactive-poison-token", "synthetic-filter-inactive-poison-source", markStatusVaultError(c.ignoredError)
 	}
 	return "synthetic-filter-inactive-token-" + hostname, "synthetic-filter-source-" + hostname, nil
 }
