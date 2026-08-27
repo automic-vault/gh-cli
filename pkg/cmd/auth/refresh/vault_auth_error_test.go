@@ -150,6 +150,7 @@ func TestRefreshRunOperationalVaultFailureStopsBeforeAuthFlowOrNetwork(t *testin
 	transport := &refreshRejectingTransport{}
 	ios, _, stdout, stderr := iostreams.Test()
 	authFlowCalls := 0
+	plainHTTPClientCalls := 0
 	err := refreshRun(&RefreshOptions{
 		IO:          ios,
 		Hostname:    "github.com",
@@ -159,6 +160,7 @@ func TestRefreshRunOperationalVaultFailureStopsBeforeAuthFlowOrNetwork(t *testin
 			return mockConfig, nil
 		},
 		PlainHttpClient: func() (*http.Client, error) {
+			plainHTTPClientCalls++
 			return &http.Client{Transport: transport}, nil
 		},
 		AuthFlow: func(*http.Client, *iostreams.IOStreams, string, []string, bool, bool) (token, username, error) {
@@ -169,6 +171,7 @@ func TestRefreshRunOperationalVaultFailureStopsBeforeAuthFlowOrNetwork(t *testin
 
 	assert.Empty(t, stdout.String())
 	assert.Empty(t, stderr.String())
+	assert.Equal(t, 0, plainHTTPClientCalls)
 	assert.Equal(t, 0, transport.calls)
 	assert.Equal(t, 0, authCfg.legacyCalls)
 	assert.Equal(t, 1, authCfg.resolverCalls)

@@ -24,13 +24,17 @@ var errSyntheticRefreshUnexpectedPostAuthResolution = errors.New("unexpected pos
 type refreshSetupAuthConfig struct {
 	*config.AuthConfig
 
-	legacyCalls          int
-	resolverCalls        int
-	preAuthResolverCall  int
-	postAuthResolverCall int
-	loginCalls           int
-	loginToken           string
-	authFlowStarted      bool
+	legacyCalls              int
+	resolverCalls            int
+	preAuthResolverCall      int
+	postAuthResolverCall     int
+	loginCalls               int
+	postLoginActiveUserCalls int
+	loginHost                string
+	loginUser                string
+	loginToken               string
+	loginSecure              bool
+	authFlowStarted          bool
 }
 
 func (c *refreshSetupAuthConfig) Hosts() []string {
@@ -53,12 +57,18 @@ func (c *refreshSetupAuthConfig) ActiveTokenWithError(string) (string, string, e
 }
 
 func (c *refreshSetupAuthConfig) ActiveUser(string) (string, error) {
+	if c.loginCalls > 0 {
+		c.postLoginActiveUserCalls++
+	}
 	return "synthetic-account", nil
 }
 
-func (c *refreshSetupAuthConfig) Login(_, _, token, _ string, _ bool) (bool, error) {
+func (c *refreshSetupAuthConfig) Login(hostname, user, token, _ string, secureStorage bool) (bool, error) {
 	c.loginCalls++
+	c.loginHost = hostname
+	c.loginUser = user
 	c.loginToken = token
+	c.loginSecure = secureStorage
 	return false, nil
 }
 
@@ -191,12 +201,17 @@ func TestRefreshRunInteractiveHTTPSUsesFreshAuthFlowCredentialForSetup(t *testin
 	assert.Equal(t, 0, authCfg.postAuthResolverCall)
 	assert.Equal(t, 1, authCfg.resolverCalls)
 	assert.Equal(t, 0, authCfg.legacyCalls)
+	assert.Equal(t, 0, authCfg.postLoginActiveUserCalls)
 	assert.Equal(t, 1, authCfg.loginCalls)
+	assert.Equal(t, "github.com", authCfg.loginHost)
+	assert.Equal(t, "synthetic-account", authCfg.loginUser)
 	assert.Equal(t, "synthetic-flow-token", authCfg.loginToken)
+	assert.True(t, authCfg.loginSecure)
 	assert.Equal(t, []string{"config credential.https://github.com.helper", "credential reject", "credential approve"}, recorder.commands)
 	if assert.Len(t, recorder.approvedInputs, 1) {
 		assert.True(t, bytes.Equal(recorder.approvedInputs[0], []byte("protocol=https\nhost=github.com\nusername=synthetic-account\npassword=synthetic-flow-token\n")), "credential setup did not receive the fresh auth-flow credential")
 	}
+	assert.Equal(t, 1, strings.Count(stderr.String(), "Authentication complete."))
 	requireRefreshSetupOutputSecretFree(t, strings.ToLower(stderr.String()+stdout.String()))
 }
 
@@ -225,8 +240,14 @@ func TestRefreshRunInteractiveHTTPSSetupFailureHasNoSuccessOutput(t *testing.T) 
 	assert.Equal(t, 0, authCfg.postAuthResolverCall)
 	assert.Equal(t, 1, authCfg.resolverCalls)
 	assert.Equal(t, 0, authCfg.legacyCalls)
+	assert.Equal(t, 0, authCfg.postLoginActiveUserCalls)
 	assert.Equal(t, 1, authCfg.loginCalls)
+	assert.Equal(t, "github.com", authCfg.loginHost)
+	assert.Equal(t, "synthetic-account", authCfg.loginUser)
+	assert.Equal(t, "synthetic-flow-token", authCfg.loginToken)
+	assert.True(t, authCfg.loginSecure)
 	assert.Len(t, recorder.approvedInputs, 1)
+	assert.Equal(t, 0, strings.Count(stderr.String(), "Authentication complete."))
 	requireRefreshSetupOutputSecretFree(t, strings.ToLower(combined))
 	assert.ErrorIs(t, err, errSyntheticRefreshSetupDenied)
 }

@@ -191,13 +191,15 @@ func TestTokenRunOperationalVaultFailureForExplicitUserModes(t *testing.T) {
 				combined += strings.ToLower(err.Error())
 			}
 			for _, forbidden := range []string{
-				"synthetic-token",
+				"synthetic-poison-token",
+				"synthetic-poison-source",
 				"synthetic-account",
 				"undefined",
 				"protocol=",
 			} {
 				assert.NotContains(t, combined, forbidden)
 			}
+			require.EqualError(t, err, "Automic Vault credential resolution failed")
 			var resolutionErr *config.AutomicVaultCredentialResolutionError
 			require.ErrorAs(t, err, &resolutionErr)
 			require.Equal(t, "Automic Vault credential resolution failed", resolutionErr.Error())
