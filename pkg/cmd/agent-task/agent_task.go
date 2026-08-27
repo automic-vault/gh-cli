@@ -9,6 +9,7 @@ import (
 	cmdCreate "github.com/cli/cli/v2/pkg/cmd/agent-task/create"
 	cmdList "github.com/cli/cli/v2/pkg/cmd/agent-task/list"
 	cmdView "github.com/cli/cli/v2/pkg/cmd/agent-task/view"
+	"github.com/cli/cli/v2/pkg/cmd/auth/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/go-gh/v2/pkg/auth"
 	"github.com/spf13/cobra"
@@ -17,9 +18,11 @@ import (
 // NewCmdAgentTask creates the base `agent-task` command.
 func NewCmdAgentTask(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "agent-task <command>",
-		Aliases: []string{"agent-tasks", "agent", "agents"},
-		Short:   "Work with agent tasks (preview)",
+		Use:           "agent-task <command>",
+		Aliases:       []string{"agent-tasks", "agent", "agents"},
+		Short:         "Work with agent tasks (preview)",
+		SilenceErrors: true,
+		SilenceUsage:  true,
 		Long: heredoc.Doc(`
 			Working with agent tasks in the GitHub CLI is in preview and
 			subject to change without notice.
@@ -84,7 +87,10 @@ func requireOAuthToken(f *cmdutil.Factory) error {
 		return errors.New("agent tasks are not supported on this host")
 	}
 
-	token, source := authCfg.ActiveToken(host)
+	token, source, err := shared.ResolveActiveToken(authCfg, host)
+	if err != nil {
+		return err
+	}
 
 	// Tokens from sources "oauth_token" and "keyring" are likely
 	// minted through our device flow.

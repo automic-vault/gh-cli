@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 
+	githubAPI "github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/pkg/cmd/attestation/api"
 	"github.com/cli/cli/v2/pkg/cmd/attestation/auth"
 	"github.com/cli/cli/v2/pkg/cmd/attestation/io"
 	"github.com/cli/cli/v2/pkg/cmd/attestation/verification"
+	authShared "github.com/cli/cli/v2/pkg/cmd/auth/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	o "github.com/cli/cli/v2/pkg/option"
 	ghauth "github.com/cli/go-gh/v2/pkg/auth"
@@ -33,9 +35,11 @@ type tufClientInstantiator func(o *tuf.Options) (*tuf.Client, error)
 func NewTrustedRootCmd(f *cmdutil.Factory, runF func(*Options) error) *cobra.Command {
 	opts := &Options{}
 	trustedRootCmd := cobra.Command{
-		Use:   "trusted-root [--tuf-url <url> --tuf-root <file-path>] [--verify-only]",
-		Args:  cobra.ExactArgs(0),
-		Short: "Output trusted_root.jsonl contents, likely for offline verification",
+		Use:           "trusted-root [--tuf-url <url> --tuf-root <file-path>] [--verify-only]",
+		Args:          cobra.ExactArgs(0),
+		Short:         "Output trusted_root.jsonl contents, likely for offline verification",
+		SilenceErrors: true,
+		SilenceUsage:  true,
 		Long: heredoc.Docf(`
 			Output contents for a trusted_root.jsonl file, likely for offline verification.
 
@@ -67,6 +71,23 @@ func NewTrustedRootCmd(f *cmdutil.Factory, runF func(*Options) error) *cobra.Com
 				return err
 			}
 
+			isTenancy := ghauth.IsTenancy(opts.Hostname)
+			var token string
+			if isTenancy {
+				c, err := f.Config()
+				if err != nil {
+					return err
+				}
+
+				token, _, err = authShared.ResolveActiveToken(c.Authentication(), opts.Hostname)
+				if err != nil {
+					return err
+				}
+				if token == "" {
+					return fmt.Errorf("not authenticated with %s", opts.Hostname)
+				}
+			}
+
 			hc, err := f.HttpClient()
 			if err != nil {
 				return err
@@ -77,15 +98,8 @@ func NewTrustedRootCmd(f *cmdutil.Factory, runF func(*Options) error) *cobra.Com
 				return err
 			}
 
-			if ghauth.IsTenancy(opts.Hostname) {
-				c, err := f.Config()
-				if err != nil {
-					return err
-				}
-
-				if !c.Authentication().HasActiveToken(opts.Hostname) {
-					return fmt.Errorf("not authenticated with %s", opts.Hostname)
-				}
+			if isTenancy {
+				hc.Transport = githubAPI.AddAuthTokenHeader(hc.Transport, staticTokenGetter{token: token})
 				logger := io.NewHandler(f.IOStreams)
 				apiClient := api.NewLiveClient(hc, externalClient, opts.Hostname, logger)
 				td, err := apiClient.GetTrustDomain()
@@ -115,6 +129,14 @@ func NewTrustedRootCmd(f *cmdutil.Factory, runF func(*Options) error) *cobra.Com
 	trustedRootCmd.Flags().StringVarP(&opts.Hostname, "hostname", "", "", "Configure host to use")
 
 	return &trustedRootCmd
+}
+
+type staticTokenGetter struct {
+	token string
+}
+
+func (s staticTokenGetter) ActiveToken(string) (string, string) {
+	return s.token, "resolved"
 }
 
 type tufConfig struct {

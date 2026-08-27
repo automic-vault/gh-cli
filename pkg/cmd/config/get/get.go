@@ -6,6 +6,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/internal/gh"
+	"github.com/cli/cli/v2/pkg/cmd/auth/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/spf13/cobra"
@@ -55,7 +56,10 @@ func NewCmdConfigGet(f *cmdutil.Factory, runF func(*GetOptions) error) *cobra.Co
 func getRun(opts *GetOptions) error {
 	// search keyring storage when fetching the `oauth_token` value
 	if opts.Hostname != "" && opts.Key == "oauth_token" {
-		token, _ := opts.Config.Authentication().ActiveToken(opts.Hostname)
+		token, _, err := shared.ResolveActiveToken(opts.Config.Authentication(), opts.Hostname)
+		if err != nil {
+			return err
+		}
 		if token == "" {
 			return errors.New(`could not find key "oauth_token"`)
 		}

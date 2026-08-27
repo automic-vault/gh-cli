@@ -9,6 +9,7 @@ import (
 
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/pkg/cmd/agent-task/capi"
+	authShared "github.com/cli/cli/v2/pkg/cmd/auth/shared"
 	prShared "github.com/cli/cli/v2/pkg/cmd/pr/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 )
@@ -25,14 +26,18 @@ func CapiClientFunc(f *cmdutil.Factory) func() (capi.CapiClient, error) {
 			return nil, err
 		}
 
-		httpClient, err := f.HttpClient()
+		authCfg := cfg.Authentication()
+		host, _ := authCfg.DefaultHost()
+		token, _, err := authShared.ResolveActiveToken(authCfg, host)
 		if err != nil {
 			return nil, err
 		}
 
-		authCfg := cfg.Authentication()
-		host, _ := authCfg.DefaultHost()
-		token, _ := authCfg.ActiveToken(host)
+		httpClient, err := f.HttpClient()
+		if err != nil {
+			return nil, err
+		}
+		httpClient.Transport = api.AddAuthTokenHeader(httpClient.Transport, staticTokenGetter{token: token})
 
 		cachedClient := api.NewCachedHTTPClient(httpClient, time.Minute*10)
 		capiBaseURL, err := resolveCapiURL(cachedClient, host)
@@ -42,6 +47,14 @@ func CapiClientFunc(f *cmdutil.Factory) func() (capi.CapiClient, error) {
 
 		return capi.NewCAPIClient(httpClient, token, host, capiBaseURL), nil
 	}
+}
+
+type staticTokenGetter struct {
+	token string
+}
+
+func (s staticTokenGetter) ActiveToken(string) (string, string) {
+	return s.token, "resolved"
 }
 
 // resolveCapiURL queries the GitHub API for the Copilot API endpoint URL.
