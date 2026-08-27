@@ -84,6 +84,9 @@ func Delete(service, user string) error {
 	}()
 	select {
 	case err := <-ch:
+		if errors.Is(err, keyring.ErrNotFound) {
+			return ErrNotFound
+		}
 		return err
 	case <-time.After(keyringTimeout):
 		return &TimeoutError{"timeout while trying to delete secret from keyring"}

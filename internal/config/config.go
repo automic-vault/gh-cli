@@ -399,6 +399,52 @@ func (c *AuthConfig) deleteKeyring(service, user string) error {
 	return keyring.Delete(service, user)
 }
 
+type keyringCredential struct {
+	token   string
+	present bool
+}
+
+func (c *AuthConfig) readKeyringCredential(service, user string) (keyringCredential, error) {
+	token, err := c.getKeyring(service, user)
+	if err == nil {
+		return keyringCredential{token: token, present: true}, nil
+	}
+	if errors.Is(err, keyring.ErrNotFound) {
+		return keyringCredential{}, nil
+	}
+	return keyringCredential{}, newAutomicVaultCredentialResolutionError(err)
+}
+
+func (c *AuthConfig) resolveUserCredential(hostname, user string) (string, string, error) {
+	token, err := c.getKeyring(keyringServiceName(hostname), user)
+	if err == nil {
+		return token, "keyring", nil
+	}
+	if !errors.Is(err, keyring.ErrNotFound) {
+		return "", "", newAutomicVaultCredentialResolutionError(err)
+	}
+
+	token, err = c.cfg.Get([]string{hostsKey, hostname, usersKey, user, oauthTokenKey})
+	if err == nil {
+		return token, "oauth_token", nil
+	}
+	return "", "", fmt.Errorf("no token found for %s", user)
+}
+
+func (c *AuthConfig) rollbackActiveKeyringCredential(service string, previous keyringCredential, providerMutated bool) error {
+	if !providerMutated {
+		return nil
+	}
+	if previous.present {
+		return c.setKeyring(service, "", previous.token)
+	}
+	err := c.deleteKeyring(service, "")
+	if errors.Is(err, keyring.ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
 // ActiveUser will retrieve the username for the active user at the given hostname.
 // This will not be accurate if the oauth token is set from an environment variable.
 func (c *AuthConfig) ActiveUser(hostname string) (string, error) {
@@ -515,66 +561,121 @@ func (c *AuthConfig) SwitchUser(hostname, user string) error {
 // It will remove the auth token from the encrypted storage if it exists there.
 func (c *AuthConfig) Logout(hostname, username string) error {
 	users := c.UsersForHost(hostname)
+	service := keyringServiceName(hostname)
 
-	// If there is only one (or zero) users, then we remove the host
-	// and unset the keyring tokens.
+	// If there is only one (or zero) users, capture both provider slots before
+	// deleting either one. This leaves enough state to restore the active slot
+	// if the account deletion fails.
 	if len(users) < 2 {
+		previousActive, err := c.readKeyringCredential(service, "")
+		if err != nil {
+			return err
+		}
+		if _, err = c.readKeyringCredential(service, username); err != nil {
+			return err
+		}
+
+		activeDeleteErr := c.deleteKeyring(service, "")
+		if activeDeleteErr != nil && !errors.Is(activeDeleteErr, keyring.ErrNotFound) {
+			return newAutomicVaultCredentialResolutionError(activeDeleteErr)
+		}
+		activeProviderMutated := activeDeleteErr == nil
+
+		accountDeleteErr := c.deleteKeyring(service, username)
+		if accountDeleteErr != nil && !errors.Is(accountDeleteErr, keyring.ErrNotFound) {
+			if rollbackErr := c.rollbackActiveKeyringCredential(service, previousActive, activeProviderMutated); rollbackErr != nil {
+				return newAutomicVaultCredentialResolutionError(errors.Join(accountDeleteErr, rollbackErr))
+			}
+			return newAutomicVaultCredentialResolutionError(accountDeleteErr)
+		}
+
 		_ = c.cfg.Remove([]string{hostsKey, hostname})
-		_ = c.deleteKeyring(keyringServiceName(hostname), "")
-		_ = c.deleteKeyring(keyringServiceName(hostname), username)
 		return ghConfig.Write(c.cfg)
 	}
 
-	// Otherwise, we remove the user from this host
-	_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username})
+	activeUser, err := c.ActiveUser(hostname)
+	if err != nil {
+		return err
+	}
 
-	// This error is ignorable because we already know there is an active user for the host
-	activeUser, _ := c.ActiveUser(hostname)
-
-	// If the user we're removing isn't active, then we just write the config
+	// An inactive account must be removed from the provider before changing
+	// the local account list.
 	if activeUser != username {
+		err := c.deleteKeyring(service, username)
+		if err != nil && !errors.Is(err, keyring.ErrNotFound) {
+			return newAutomicVaultCredentialResolutionError(err)
+		}
+		_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username})
 		return ghConfig.Write(c.cfg)
 	}
 
-	// Otherwise we get the first user in the slice that isn't the user we're removing
+	// Capture the old active and replacement credentials before changing the
+	// active slot. Only provider steps occur before the local config mutation.
 	switchUserIdx := slices.IndexFunc(users, func(n string) bool {
 		return n != username
 	})
+	nextUser := users[switchUserIdx]
+	previousActive, err := c.readKeyringCredential(service, "")
+	if err != nil {
+		return err
+	}
+	nextToken, nextSource, err := c.resolveUserCredential(hostname, nextUser)
+	if err != nil {
+		return err
+	}
 
-	// And activate them
-	return c.activateUser(hostname, users[switchUserIdx])
+	var activeProviderMutated bool
+	if nextSource == "keyring" {
+		if err := c.setKeyring(service, "", nextToken); err != nil {
+			return newAutomicVaultCredentialResolutionError(err)
+		}
+		activeProviderMutated = true
+	} else {
+		deleteErr := c.deleteKeyring(service, "")
+		if deleteErr != nil && !errors.Is(deleteErr, keyring.ErrNotFound) {
+			return newAutomicVaultCredentialResolutionError(deleteErr)
+		}
+		activeProviderMutated = deleteErr == nil
+	}
+
+	departingDeleteErr := c.deleteKeyring(service, username)
+	if departingDeleteErr != nil && !errors.Is(departingDeleteErr, keyring.ErrNotFound) {
+		if rollbackErr := c.rollbackActiveKeyringCredential(service, previousActive, activeProviderMutated); rollbackErr != nil {
+			return newAutomicVaultCredentialResolutionError(errors.Join(departingDeleteErr, rollbackErr))
+		}
+		return newAutomicVaultCredentialResolutionError(departingDeleteErr)
+	}
+
+	_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username})
+	if nextSource == "keyring" {
+		_ = c.cfg.Remove([]string{hostsKey, hostname, oauthTokenKey})
+	} else {
+		c.cfg.Set([]string{hostsKey, hostname, oauthTokenKey}, nextToken)
+	}
+	c.cfg.Set([]string{hostsKey, hostname, userKey}, nextUser)
+	return ghConfig.Write(c.cfg)
 }
 
 func (c *AuthConfig) activateUser(hostname, user string) error {
-	// We first need to idempotently clear out any set tokens for the host
-	_ = c.deleteKeyring(keyringServiceName(hostname), "")
-	_ = c.cfg.Remove([]string{hostsKey, hostname, oauthTokenKey})
+	token, source, err := c.resolveUserCredential(hostname, user)
+	if err != nil {
+		return err
+	}
 
-	// Then we'll move the keyring token or insecure token as necessary, only one of the
-	// following branches should be true.
-
-	// If there is a token in the secure keyring for the user, move it to the active slot
-	var tokenSwitched bool
-	if token, err := c.getKeyring(keyringServiceName(hostname), user); err == nil {
-		if err = c.setKeyring(keyringServiceName(hostname), "", token); err != nil {
-			return fmt.Errorf("failed to move active token in keyring: %v", err)
+	service := keyringServiceName(hostname)
+	if source == "keyring" {
+		if err := c.setKeyring(service, "", token); err != nil {
+			return newAutomicVaultCredentialResolutionError(err)
 		}
-		tokenSwitched = true
-	}
-
-	// If there is a token in the insecure config for the user, move it to the active field
-	if token, err := c.cfg.Get([]string{hostsKey, hostname, usersKey, user, oauthTokenKey}); err == nil {
+		_ = c.cfg.Remove([]string{hostsKey, hostname, oauthTokenKey})
+	} else {
+		if err := c.deleteKeyring(service, ""); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+			return newAutomicVaultCredentialResolutionError(err)
+		}
 		c.cfg.Set([]string{hostsKey, hostname, oauthTokenKey}, token)
-		tokenSwitched = true
 	}
 
-	if !tokenSwitched {
-		return fmt.Errorf("no token found for %s", user)
-	}
-
-	// Then we'll update the active user for the host
 	c.cfg.Set([]string{hostsKey, hostname, userKey}, user)
-
 	return ghConfig.Write(c.cfg)
 }
 
@@ -600,13 +701,13 @@ func (e *tokenNotFoundError) Unwrap() error {
 }
 
 func (c *AuthConfig) TokenForUser(hostname, user string) (string, string, error) {
-	token, err := keyring.Get(keyringServiceName(hostname), user)
+	token, err := c.getKeyring(keyringServiceName(hostname), user)
 	if err == nil {
 		return token, "keyring", nil
 	}
 
 	if !errors.Is(err, keyring.ErrNotFound) {
-		return "", "default", err
+		return "", "", newAutomicVaultCredentialResolutionError(err)
 	}
 
 	return "", "default", &tokenNotFoundError{user: user}
