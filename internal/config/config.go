@@ -231,13 +231,47 @@ type AuthConfig struct {
 	tokenOverride       func(string) (string, string)
 }
 
+// AutomicVaultCredentialResolutionError reports an operational failure while
+// resolving a credential through Automic Vault.
+//
+// Its error text is stable and intentionally omits the underlying cause. Use
+// errors.Is or errors.As to inspect the cause or this error classification.
+type AutomicVaultCredentialResolutionError struct {
+	cause error
+}
+
+func (e *AutomicVaultCredentialResolutionError) Error() string {
+	return "Automic Vault credential resolution failed"
+}
+
+func (e *AutomicVaultCredentialResolutionError) Unwrap() error {
+	return e.cause
+}
+
+// IsAutomicVaultCredentialResolution identifies operational Automic Vault
+// credential-resolution failures without relying on error text.
+func (e *AutomicVaultCredentialResolutionError) IsAutomicVaultCredentialResolution() bool {
+	return true
+}
+
+func newAutomicVaultCredentialResolutionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var resolutionErr *AutomicVaultCredentialResolutionError
+	if errors.As(err, &resolutionErr) {
+		return err
+	}
+	return &AutomicVaultCredentialResolutionError{cause: err}
+}
+
 // ActiveToken will retrieve the active auth token for the given hostname,
 // searching environment variables and encrypted storage.
 //
-// Callers that need to distinguish an unavailable credential provider from an
-// absent credential should use ActiveTokenWithError. This method preserves the
-// legacy no-error API while ensuring that an operational provider error cannot
-// silently select a different credential.
+// This legacy no-error API discards operational resolution errors for
+// compatibility. Auth-sensitive callers must use ActiveTokenWithError so that
+// they can distinguish an unavailable credential provider from an absent
+// credential and fail closed.
 func (c *AuthConfig) ActiveToken(hostname string) (string, string) {
 	token, source, _ := c.ActiveTokenWithError(hostname)
 	return token, source
@@ -265,13 +299,19 @@ func (c *AuthConfig) ActiveTokenWithError(hostname string) (string, string, erro
 	// account-scoped slot to resolve, so preserve the host-wide compatibility
 	// lookup below. Once an account is selected, however, only an explicit
 	// keyring.ErrNotFound permits that lookup.
-	if user, err := c.ActiveUser(hostname); err == nil {
+	user, err := c.ActiveUser(hostname)
+	if err != nil {
+		var keyNotFoundError *ghConfig.KeyNotFoundError
+		if !errors.As(err, &keyNotFoundError) {
+			return "", "", newAutomicVaultCredentialResolutionError(err)
+		}
+	} else if user != "" {
 		token, err := c.TokenFromKeyringForUser(hostname, user)
 		if err == nil {
 			return token, "keyring", nil
 		}
 		if !errors.Is(err, keyring.ErrNotFound) {
-			return "", "", fmt.Errorf("failed to retrieve active token: %w", err)
+			return "", "", newAutomicVaultCredentialResolutionError(err)
 		}
 	}
 
@@ -282,7 +322,7 @@ func (c *AuthConfig) ActiveTokenWithError(hostname string) (string, string, erro
 	if errors.Is(err, keyring.ErrNotFound) {
 		return "", "", nil
 	}
-	return "", "", fmt.Errorf("failed to retrieve active token: %w", err)
+	return "", "", newAutomicVaultCredentialResolutionError(err)
 }
 
 // HasActiveToken returns true when a token for the hostname is present.
