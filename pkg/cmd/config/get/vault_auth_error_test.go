@@ -3,6 +3,7 @@ package get
 import (
 	"bytes"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -66,10 +67,39 @@ func (c *configGetLegacyOnlyAuthConfig) ActiveToken(string) (string, string) {
 	return "synthetic-legacy-oauth-token", "oauth_token"
 }
 
-func configGetOptions(t *testing.T, authCfg gh.AuthConfig) (*GetOptions, *bytes.Buffer, *bytes.Buffer) {
+type configGetEnvironmentAuthConfig struct {
+	gh.AuthConfig
+	legacyCalls   int
+	resolverCalls int
+	keyringCalls  int
+}
+
+var _ gh.AuthConfig = (*configGetEnvironmentAuthConfig)(nil)
+
+func (c *configGetEnvironmentAuthConfig) ActiveToken(string) (string, string) {
+	c.legacyCalls++
+	return os.Getenv("GH_TOKEN"), "GH_TOKEN"
+}
+
+func (c *configGetEnvironmentAuthConfig) ActiveTokenWithError(string) (string, string, error) {
+	c.resolverCalls++
+	if token := os.Getenv("GH_TOKEN"); token != "" {
+		return token, "GH_TOKEN", nil
+	}
+	return "", "", nil
+}
+
+func (c *configGetEnvironmentAuthConfig) TokenFromKeyring(string) (string, error) {
+	c.keyringCalls++
+	return "", nil
+}
+
+func configGetOptions(t *testing.T, authCfg gh.AuthConfig) (*GetOptions, *bytes.Buffer, *bytes.Buffer, *ghmock.ConfigMock) {
 	t.Helper()
 	mockConfig := &ghmock.ConfigMock{
 		AuthenticationFunc: func() gh.AuthConfig { return authCfg },
+		SetFunc:            func(string, string, string) {},
+		WriteFunc:          func() error { return nil },
 	}
 	ios, _, stdout, stderr := iostreams.Test()
 	return &GetOptions{
@@ -77,7 +107,7 @@ func configGetOptions(t *testing.T, authCfg gh.AuthConfig) (*GetOptions, *bytes.
 		Config:   mockConfig,
 		Hostname: "github.com",
 		Key:      "oauth_token",
-	}, stdout, stderr
+	}, stdout, stderr, mockConfig
 }
 
 func TestGetRunOAuthTokenOperationalVaultFailureIsLocalAndSilent(t *testing.T) {
@@ -88,7 +118,7 @@ func TestGetRunOAuthTokenOperationalVaultFailureIsLocalAndSilent(t *testing.T) {
 		source:       "synthetic-poison-source",
 		err:          &configGetOuterVaultError{cause: &configGetMarkedVaultError{cause: errSyntheticConfigGetVaultDenied}},
 	}
-	opts, stdout, stderr := configGetOptions(t, authCfg)
+	opts, stdout, stderr, mockConfig := configGetOptions(t, authCfg)
 
 	err := getRun(opts)
 
@@ -96,6 +126,8 @@ func TestGetRunOAuthTokenOperationalVaultFailureIsLocalAndSilent(t *testing.T) {
 	require.Empty(t, stderr.String())
 	require.Equal(t, 1, authCfg.resolverCalls)
 	require.Equal(t, 0, authCfg.legacyCalls)
+	require.Empty(t, mockConfig.SetCalls(), "credential retrieval must not mutate configuration")
+	require.Empty(t, mockConfig.WriteCalls(), "credential retrieval must not write configuration")
 	require.EqualError(t, err, "Automic Vault credential resolution failed")
 	require.ErrorIs(t, err, errSyntheticConfigGetVaultDenied)
 	var marker interface{ IsAutomicVaultCredentialResolution() bool }
@@ -113,7 +145,7 @@ func TestGetRunOAuthTokenUsesErrorAwareResolver(t *testing.T) {
 		token:        "synthetic-resolved-oauth-token",
 		source:       "keyring",
 	}
-	opts, stdout, stderr := configGetOptions(t, authCfg)
+	opts, stdout, stderr, _ := configGetOptions(t, authCfg)
 
 	err := getRun(opts)
 
@@ -129,7 +161,7 @@ func TestGetRunOAuthTokenIntentionalAbsenceRemainsCanonical(t *testing.T) {
 		legacyToken:  "synthetic-poison-legacy-token",
 		legacySource: "synthetic-poison-legacy-source",
 	}
-	opts, stdout, stderr := configGetOptions(t, authCfg)
+	opts, stdout, stderr, _ := configGetOptions(t, authCfg)
 
 	err := getRun(opts)
 
@@ -148,7 +180,7 @@ func TestGetRunOAuthTokenKeepsLegacyOnlyCompatibility(t *testing.T) {
 	}); ok {
 		t.Fatal("legacy-only fixture must not implement the resolver")
 	}
-	opts, stdout, stderr := configGetOptions(t, authCfg)
+	opts, stdout, stderr, _ := configGetOptions(t, authCfg)
 
 	err := getRun(opts)
 
@@ -156,4 +188,21 @@ func TestGetRunOAuthTokenKeepsLegacyOnlyCompatibility(t *testing.T) {
 	require.Equal(t, "synthetic-legacy-oauth-token\n", stdout.String())
 	require.Empty(t, stderr.String())
 	require.Equal(t, 1, authCfg.legacyCalls)
+}
+
+func TestGetRunOAuthTokenEnvironmentPrecedenceAvoidsKeyringAndMutation(t *testing.T) {
+	t.Setenv("GH_TOKEN", "synthetic-environment-oauth-token")
+	authCfg := &configGetEnvironmentAuthConfig{}
+	opts, stdout, stderr, mockConfig := configGetOptions(t, authCfg)
+
+	err := getRun(opts)
+
+	require.NoError(t, err)
+	require.Equal(t, "synthetic-environment-oauth-token\n", stdout.String())
+	require.Empty(t, stderr.String())
+	require.Equal(t, 1, authCfg.resolverCalls, "environment precedence must use the error-aware resolver")
+	require.Equal(t, 0, authCfg.legacyCalls, "environment precedence must not use the legacy getter")
+	require.Equal(t, 0, authCfg.keyringCalls, "environment precedence must not consult keyring storage")
+	require.Empty(t, mockConfig.SetCalls(), "environment retrieval must not mutate configuration")
+	require.Empty(t, mockConfig.WriteCalls(), "environment retrieval must not write configuration")
 }

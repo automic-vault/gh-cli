@@ -57,11 +57,17 @@ var _ gh.AuthConfig = (*trustedRootErrorAwareAuthConfig)(nil)
 
 func (c *trustedRootErrorAwareAuthConfig) HasActiveToken(string) bool {
 	c.hasActiveTokenCalls++
+	if c.trace != nil {
+		*c.trace = append(*c.trace, "has-active")
+	}
 	return c.hasActiveToken
 }
 
 func (c *trustedRootErrorAwareAuthConfig) ActiveToken(string) (string, string) {
 	c.legacyCalls++
+	if c.trace != nil {
+		*c.trace = append(*c.trace, "legacy")
+	}
 	return c.legacyToken, c.legacySource
 }
 
@@ -77,17 +83,24 @@ type trustedRootLegacyOnlyAuthConfig struct {
 	gh.AuthConfig
 	hasActiveTokenCalls int
 	legacyCalls         int
+	trace               *[]string
 }
 
 var _ gh.AuthConfig = (*trustedRootLegacyOnlyAuthConfig)(nil)
 
 func (c *trustedRootLegacyOnlyAuthConfig) HasActiveToken(string) bool {
 	c.hasActiveTokenCalls++
+	if c.trace != nil {
+		*c.trace = append(*c.trace, "has-active")
+	}
 	return true
 }
 
 func (c *trustedRootLegacyOnlyAuthConfig) ActiveToken(string) (string, string) {
 	c.legacyCalls++
+	if c.trace != nil {
+		*c.trace = append(*c.trace, "legacy")
+	}
 	return "synthetic-legacy-trusted-root-token", "oauth_token"
 }
 
@@ -146,10 +159,16 @@ func runTrustedRootWithSyntheticAuth(t *testing.T, authCfg gh.AuthConfig, transp
 		},
 		HttpClient: func() (*http.Client, error) {
 			result.httpCalls++
+			if trace != nil {
+				*trace = append(*trace, "http-factory")
+			}
 			return &http.Client{Transport: transport}, nil
 		},
 		ExternalHttpClient: func() (*http.Client, error) {
 			result.externalCalls++
+			if trace != nil {
+				*trace = append(*trace, "external-factory")
+			}
 			return &http.Client{Transport: external}, nil
 		},
 	}
@@ -227,7 +246,7 @@ func TestTrustedRootTenancyResolvedCredentialOrderAndHeader(t *testing.T) {
 	result := runTrustedRootWithSyntheticAuth(t, authCfg, transport, transport, &trace)
 
 	require.NoError(t, result.err)
-	assert.Equal(t, []string{"resolver", "meta"}, result.trace)
+	assert.Equal(t, []string{"resolver", "http-factory", "external-factory", "meta"}, result.trace)
 	assert.Equal(t, 1, result.httpCalls)
 	assert.Equal(t, 1, result.externalCalls)
 	assert.Equal(t, 1, transport.calls)
@@ -279,7 +298,7 @@ func TestTrustedRootTenancyProvider401RemainsOrdinaryHTTPError(t *testing.T) {
 	require.ErrorAs(t, result.err, &httpErr)
 	require.Equal(t, http.StatusUnauthorized, httpErr.StatusCode)
 	require.NotContains(t, strings.ToLower(result.err.Error()), "vault")
-	assert.Equal(t, []string{"resolver", "meta"}, result.trace)
+	assert.Equal(t, []string{"resolver", "http-factory", "external-factory", "meta"}, result.trace)
 	assert.Equal(t, 1, result.httpCalls)
 	assert.Equal(t, 1, result.externalCalls)
 	assert.Equal(t, 1, transport.calls)
@@ -292,7 +311,7 @@ func TestTrustedRootTenancyProvider401RemainsOrdinaryHTTPError(t *testing.T) {
 
 func TestTrustedRootTenancyKeepsLegacyOnlyCompatibility(t *testing.T) {
 	trace := []string{}
-	authCfg := &trustedRootLegacyOnlyAuthConfig{}
+	authCfg := &trustedRootLegacyOnlyAuthConfig{trace: &trace}
 	if _, ok := any(authCfg).(interface {
 		ActiveTokenWithError(string) (string, string, error)
 	}); ok {
@@ -302,13 +321,16 @@ func TestTrustedRootTenancyKeepsLegacyOnlyCompatibility(t *testing.T) {
 	result := runTrustedRootWithSyntheticAuth(t, authCfg, transport, transport, &trace)
 
 	require.NoError(t, result.err)
-	require.Equal(t, []string{"meta"}, result.trace)
+	require.Equal(t, []string{"legacy", "http-factory", "external-factory", "meta"}, result.trace)
 	require.Equal(t, 1, result.httpCalls)
 	require.Equal(t, 1, result.externalCalls)
 	require.Equal(t, 1, transport.calls)
 	require.Equal(t, 1, result.runCalls)
-	require.Equal(t, 0, authCfg.legacyCalls, "the existing tenancy presence check does not need the token value")
-	require.Equal(t, 1, authCfg.hasActiveTokenCalls)
+	require.Equal(t, 1, authCfg.legacyCalls)
+	require.Equal(t, 0, authCfg.hasActiveTokenCalls, "legacy compatibility must resolve the token rather than a presence-only check")
+	require.Len(t, transport.authorizations, 1)
+	require.Equal(t, "token synthetic-legacy-trusted-root-token", transport.authorizations[0])
+	require.NotContains(t, strings.ToLower(transport.authorizations[0]), "undefined")
 }
 
 func TestTrustedRootNonTenancyDoesNotResolveVaultCredentials(t *testing.T) {
@@ -349,13 +371,21 @@ func TestTrustedRootUnsupportedHostStopsBeforeVaultAndClients(t *testing.T) {
 	authCfg := &trustedRootErrorAwareAuthConfig{trace: &trace}
 	transport := &trustedRootRecordingTransport{trace: &trace}
 	testIO, _, stdout, stderr := iostreams.Test()
+	httpCalls := 0
+	externalCalls := 0
 	f := &cmdutil.Factory{
 		IOStreams: testIO,
 		Config: func() (gh.Config, error) {
 			return &ghmock.ConfigMock{AuthenticationFunc: func() gh.AuthConfig { return authCfg }}, nil
 		},
-		HttpClient:         func() (*http.Client, error) { return &http.Client{Transport: transport}, nil },
-		ExternalHttpClient: func() (*http.Client, error) { return &http.Client{Transport: transport}, nil },
+		HttpClient: func() (*http.Client, error) {
+			httpCalls++
+			return &http.Client{Transport: transport}, nil
+		},
+		ExternalHttpClient: func() (*http.Client, error) {
+			externalCalls++
+			return &http.Client{Transport: transport}, nil
+		},
 	}
 	cmd := NewTrustedRootCmd(f, func(*Options) error {
 		t.Fatal("unsupported host must not execute the command")
@@ -369,6 +399,8 @@ func TestTrustedRootUnsupportedHostStopsBeforeVaultAndClients(t *testing.T) {
 	require.Equal(t, 0, authCfg.resolverCalls)
 	require.Equal(t, 0, authCfg.legacyCalls)
 	require.Equal(t, 0, authCfg.hasActiveTokenCalls)
+	require.Equal(t, 0, httpCalls)
+	require.Equal(t, 0, externalCalls)
 	require.Equal(t, 0, transport.calls)
 	require.NotContains(t, strings.ToLower(stdout.String()), "synthetic")
 	require.NotContains(t, strings.ToLower(stderr.String()), "synthetic")

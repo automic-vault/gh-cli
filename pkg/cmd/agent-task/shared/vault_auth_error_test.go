@@ -254,6 +254,7 @@ func TestCapiClientFuncRecoversOnFreshInvocationAfterVaultFailure(t *testing.T) 
 	assert.Equal(t, []string{"default-host", "resolver", "http-factory", "graphql", "capi"}, trace)
 	assert.Equal(t, 1, clientCalls)
 	assert.Equal(t, 2, transport.calls)
+	require.Len(t, transport.authorizations, 2)
 	assert.Equal(t, "Bearer synthetic-recovered-capi-token", transport.authorizations[1])
 	assert.Equal(t, 0, authCfg.legacyCalls)
 	assert.Equal(t, 2, authCfg.resolverCalls)
@@ -297,8 +298,15 @@ func TestCapiClientFuncKeepsLegacyOnlyCompatibility(t *testing.T) {
 	client, err := CapiClientFunc(capiFactory(authCfg, transport, &trace, &clientCalls))()
 	require.NoError(t, err)
 	require.NotNil(t, client)
+	_, err = client.ListLatestSessionsForViewer(context.Background(), 1)
+	require.NoError(t, err)
 	require.Equal(t, 1, clientCalls)
-	require.Equal(t, 1, transport.calls)
+	require.Equal(t, 2, transport.calls)
 	require.Equal(t, 1, authCfg.legacyCalls)
-	require.Equal(t, "", transport.authorizations[0], "legacy compatibility retains the existing discovery transport contract")
+	require.Len(t, transport.authorizations, 2)
+	require.Equal(t, []string{
+		"token synthetic-legacy-capi-token",
+		"Bearer synthetic-legacy-capi-token",
+	}, transport.authorizations)
+	require.NotContains(t, strings.ToLower(strings.Join(transport.authorizations, " ")), "undefined")
 }

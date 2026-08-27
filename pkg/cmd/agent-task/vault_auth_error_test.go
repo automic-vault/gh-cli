@@ -3,11 +3,14 @@ package agent
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cli/cli/v2/internal/gh"
 	ghmock "github.com/cli/cli/v2/internal/gh/mock"
 	"github.com/cli/cli/v2/pkg/cmdutil"
+	"github.com/cli/cli/v2/pkg/iostreams"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,7 +89,7 @@ func agentFactoryForAuth(authCfg gh.AuthConfig) *cmdutil.Factory {
 func TestRequireOAuthTokenOperationalVaultFailureIsLocalAndDoesNotUseLegacyOrRunCommand(t *testing.T) {
 	authCfg := &agentErrorAwareAuthConfig{
 		legacyToken:  "gho_synthetic-legacy-token",
-		legacySource: "legacy-host-slot",
+		legacySource: "keyring",
 		token:        "gho_synthetic-poison-token",
 		source:       "synthetic-poison-source",
 		err:          &agentOuterVaultError{cause: &agentMarkedVaultError{cause: errSyntheticAgentVaultDenied}},
@@ -104,18 +107,47 @@ func TestRequireOAuthTokenOperationalVaultFailureIsLocalAndDoesNotUseLegacyOrRun
 		return nil, errors.New("synthetic HTTP construction must not occur")
 	}
 
-	err := requireOAuthToken(f)
+	testIO, _, stdout, stderr := iostreams.Test()
+	f.IOStreams = testIO
+	cmd := NewCmdAgentTask(f)
+	childRunCalls := 0
+	cmd.AddCommand(&cobra.Command{
+		Use: "synthetic",
+		RunE: func(*cobra.Command, []string) error {
+			childRunCalls++
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"synthetic"})
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	err := cmd.Execute()
+
+	require.Equal(t, 0, childRunCalls, "credential failure must stop before the Cobra child runs")
 	require.False(t, commandExecuted, "credential failure must stop before command/client execution")
 	require.Equal(t, 0, authCfg.legacyCalls, "operational Vault failure must not use the legacy getter")
 	require.Equal(t, 1, authCfg.resolverCalls, "operational Vault failure must use the resolver once")
+	require.Empty(t, stdout.String(), "operational failure must not emit child output")
+	require.Empty(t, stderr.String(), "operational failure must not emit Cobra guidance")
 	require.EqualError(t, err, "Automic Vault credential resolution failed")
 	require.ErrorIs(t, err, errSyntheticAgentVaultDenied)
 	var marker interface{ IsAutomicVaultCredentialResolution() bool }
 	require.ErrorAs(t, err, &marker)
 	require.True(t, marker.IsAutomicVaultCredentialResolution())
-	require.NotContains(t, err.Error(), "synthetic-poison")
-	require.NotContains(t, err.Error(), "log in")
-	require.NotContains(t, err.Error(), "re-authenticate")
+	combined := strings.ToLower(err.Error() + stdout.String() + stderr.String())
+	for _, forbidden := range []string{
+		"synthetic-poison",
+		"gho_synthetic-legacy-token",
+		"not logged in",
+		"logged out",
+		"invalid",
+		"log in",
+		"login",
+		"re-authenticate",
+		"authenticate",
+	} {
+		require.NotContains(t, combined, forbidden)
+	}
 }
 
 func TestRequireOAuthTokenUsesErrorAwareKeyringSource(t *testing.T) {
