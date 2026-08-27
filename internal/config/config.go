@@ -597,7 +597,10 @@ func (c *AuthConfig) Login(hostname, username, token, gitProtocol string, secure
 	var setErr error
 	if secureStorage {
 		// Try to set the token for this user in the encrypted storage for later switching
-		setErr = keyring.Set(keyringServiceName(hostname), username, token)
+		// Route through the per-instance seam so transaction callers can keep the
+		// account write and active-slot write under one provider authority. With a
+		// nil seam this remains the existing keyring.Set behavior.
+		setErr = c.setKeyring(keyringServiceName(hostname), username, token)
 		if setErr == nil {
 			// Clean up the previous oauth_token from the config file, if there were one
 			_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username, oauthTokenKey})
