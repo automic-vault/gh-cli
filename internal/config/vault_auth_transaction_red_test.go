@@ -12,15 +12,19 @@ import (
 )
 
 var (
-	errSyntheticSwitchCurrentGetDenied   = errors.New("synthetic Vault current-account read denied")
-	errSyntheticSwitchTargetGetDenied    = errors.New("synthetic Vault target-account read denied")
-	errSyntheticSwitchTargetSetDenied    = errors.New("synthetic Vault target active-slot write denied")
-	errSyntheticSwitchTargetDeleteDenied = errors.New("synthetic Vault target active-slot delete denied")
-	errSyntheticSwitchConfigWriteDenied  = errors.New("synthetic config write denied")
-	errSyntheticSwitchRollbackDenied     = errors.New("synthetic Vault switch rollback denied")
-	errSyntheticLogoutActiveGetDenied    = errors.New("synthetic Vault active-slot read denied")
-	errSyntheticLogoutAccountGetDenied   = errors.New("synthetic Vault account-slot read denied")
-	errSyntheticLogoutConfigWriteDenied  = errors.New("synthetic config write denied")
+	errSyntheticSwitchCurrentGetDenied        = errors.New("synthetic Vault current-account read denied")
+	errSyntheticSwitchTargetGetDenied         = errors.New("synthetic Vault target-account read denied")
+	errSyntheticSwitchTargetSetDenied         = errors.New("synthetic Vault target active-slot write denied")
+	errSyntheticSwitchTargetDeleteDenied      = errors.New("synthetic Vault target active-slot delete denied")
+	errSyntheticSwitchConfigWriteDenied       = errors.New("synthetic config write denied")
+	errSyntheticSwitchRollbackDenied          = errors.New("synthetic Vault switch rollback denied")
+	errSyntheticLogoutActiveGetDenied         = errors.New("synthetic Vault active-slot read denied")
+	errSyntheticLogoutAccountGetDenied        = errors.New("synthetic Vault account-slot read denied")
+	errSyntheticLogoutConfigWriteDenied       = errors.New("synthetic config write denied")
+	errSyntheticLogoutActiveRollbackDenied    = errors.New("synthetic Vault active-slot rollback denied")
+	errSyntheticLogoutAccountRollbackDenied   = errors.New("synthetic Vault account-slot rollback denied")
+	errSyntheticLogoutInactiveRollbackDenied  = errors.New("synthetic Vault inactive-account rollback denied")
+	errSyntheticLogoutDepartingRollbackDenied = errors.New("synthetic Vault departing-account rollback denied")
 )
 
 type authSwitchFixture struct {
@@ -558,7 +562,9 @@ func TestLogoutSingleUserConfigWriteFailureRestoresProviderAndConfig(t *testing.
 	accountSlot, accountSlotErr := keyring.Get(keyringServiceName(hostname), username)
 	assert.True(t, accountSlotErr == nil && accountSlot == token, "account provider credential was not restored after config write failure")
 	assertLogoutErrorSecretFree(t, err, username, token)
-	requireAutomicVaultCredentialError(t, err, errSyntheticLogoutConfigWriteDenied)
+	assert.ErrorIs(t, err, errSyntheticLogoutConfigWriteDenied)
+	var resolutionErr *AutomicVaultCredentialResolutionError
+	assert.False(t, errors.As(err, &resolutionErr), "a pure config write failure must not be mislabeled as a Vault failure")
 }
 
 func TestLogoutSingleUserConfigWriteAndRollbackFailuresRemainClassified(t *testing.T) {
@@ -577,7 +583,8 @@ func TestLogoutSingleUserConfigWriteAndRollbackFailuresRemainClassified(t *testi
 	authCfg.configWrite = func() error {
 		return errSyntheticLogoutConfigWriteDenied
 	}
-	var deleteCalls, restoreCalls int
+	var deleteCalls int
+	var restoreUsers []string
 	authCfg.keyringGet = func(service, user string) (string, error) {
 		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
 		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
@@ -592,21 +599,28 @@ func TestLogoutSingleUserConfigWriteAndRollbackFailuresRemainClassified(t *testi
 	authCfg.keyringSet = func(service, user, secret string) error {
 		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
 		assert.True(t, (user == "" || user == username) && secret == token, "rollback used an unexpected provider value")
-		restoreCalls++
-		return errSyntheticSwitchRollbackDenied
+		restoreUsers = append(restoreUsers, user)
+		switch user {
+		case "":
+			return errSyntheticLogoutActiveRollbackDenied
+		case username:
+			return errSyntheticLogoutAccountRollbackDenied
+		default:
+			return errSyntheticLogoutAccountRollbackDenied
+		}
 	}
 
 	err = authCfg.Logout(hostname, username)
 
 	assert.Equal(t, 2, deleteCalls, "single-user config failure did not complete the provider delete sequence")
-	assert.GreaterOrEqual(t, restoreCalls, 1, "single-user config failure did not attempt provider rollback")
+	assert.True(t, len(restoreUsers) == 2 && restoreUsers[0] == "" && restoreUsers[1] == username, "single-user rollback stopped after the first failed slot restoration")
 	assert.True(t, bytes.Equal(beforeHosts, snapshotHostsConfig(t, readConfigs)), "persisted authentication state changed despite rollback failure")
 	assertSyntheticStringSlice(t, beforeUsers, authCfg.UsersForHost(hostname), "account list changed despite rollback failure")
 	currentUser, currentUserErr := authCfg.ActiveUser(hostname)
 	assert.NoError(t, currentUserErr)
 	assertSyntheticString(t, beforeActive, currentUser, "active account changed despite rollback failure")
 	assertLogoutErrorSecretFree(t, err, username, token)
-	requireAutomicVaultCredentialErrors(t, err, errSyntheticLogoutConfigWriteDenied, errSyntheticSwitchRollbackDenied)
+	requireAutomicVaultCredentialErrors(t, err, errSyntheticLogoutConfigWriteDenied, errSyntheticLogoutActiveRollbackDenied, errSyntheticLogoutAccountRollbackDenied)
 }
 
 func TestLogoutInactiveUserConfigWriteFailureRestoresProviderAndConfig(t *testing.T) {
@@ -639,7 +653,37 @@ func TestLogoutInactiveUserConfigWriteFailureRestoresProviderAndConfig(t *testin
 	inactiveSlot, inactiveSlotErr := keyring.Get(keyringServiceName(f.hostname), f.targetUser)
 	assert.True(t, inactiveSlotErr == nil && inactiveSlot == f.targetToken, "inactive provider credential was not restored after config write failure")
 	assertLogoutErrorSecretFree(t, err, f.activeUser, f.targetUser, f.activeToken, f.targetToken)
-	requireAutomicVaultCredentialError(t, err, errSyntheticLogoutConfigWriteDenied)
+	assert.ErrorIs(t, err, errSyntheticLogoutConfigWriteDenied)
+	var resolutionErr *AutomicVaultCredentialResolutionError
+	assert.False(t, errors.As(err, &resolutionErr), "a pure config write failure must not be mislabeled as a Vault failure")
+}
+
+func TestLogoutInactiveUserConfigWriteAndRollbackFailureRemainClassified(t *testing.T) {
+	f := newSecureAuthSwitchFixture(t)
+	f.authCfg.configWrite = func() error {
+		return errSyntheticLogoutConfigWriteDenied
+	}
+	var deletes, restores []string
+	f.authCfg.keyringDelete = func(service, user string) error {
+		assert.True(t, service == keyringServiceName(f.hostname), "unexpected keyring service")
+		f.assertUnchanged(t)
+		deletes = append(deletes, user)
+		return keyring.Delete(service, user)
+	}
+	f.authCfg.keyringSet = func(service, user, secret string) error {
+		assert.True(t, service == keyringServiceName(f.hostname), "unexpected keyring service")
+		assert.True(t, user == f.targetUser && secret == f.targetToken, "inactive rollback used an unexpected provider value")
+		restores = append(restores, user)
+		return errSyntheticLogoutInactiveRollbackDenied
+	}
+
+	err := f.authCfg.Logout(f.hostname, f.targetUser)
+
+	assertSyntheticStringSlice(t, []string{f.targetUser}, deletes, "inactive account delete sequence changed")
+	assertSyntheticStringSlice(t, []string{f.targetUser}, restores, "inactive account rollback was not attempted")
+	f.assertUnchanged(t)
+	assertLogoutErrorSecretFree(t, err, f.activeUser, f.targetUser, f.activeToken, f.targetToken)
+	requireAutomicVaultCredentialErrors(t, err, errSyntheticLogoutConfigWriteDenied, errSyntheticLogoutInactiveRollbackDenied)
 }
 
 func TestLogoutActiveUserConfigWriteFailureRestoresTwoUserProviderAndConfig(t *testing.T) {
@@ -680,5 +724,53 @@ func TestLogoutActiveUserConfigWriteFailureRestoresTwoUserProviderAndConfig(t *t
 	departingSlot, departingSlotErr := keyring.Get(keyringServiceName(f.hostname), f.activeUser)
 	assert.True(t, departingSlotErr == nil && departingSlot == f.activeToken, "departing provider credential was not restored after config write failure")
 	assertLogoutErrorSecretFree(t, err, f.activeUser, f.targetUser, f.activeToken, f.targetToken)
-	requireAutomicVaultCredentialError(t, err, errSyntheticLogoutConfigWriteDenied)
+	assert.ErrorIs(t, err, errSyntheticLogoutConfigWriteDenied)
+	var resolutionErr *AutomicVaultCredentialResolutionError
+	assert.False(t, errors.As(err, &resolutionErr), "a pure config write failure must not be mislabeled as a Vault failure")
+}
+
+func TestLogoutActiveUserConfigWriteAndRollbackFailuresRemainClassified(t *testing.T) {
+	f := newSecureAuthSwitchFixture(t)
+	f.authCfg.configWrite = func() error {
+		return errSyntheticLogoutConfigWriteDenied
+	}
+	var setUsers, setSecrets, deletes []string
+	f.authCfg.keyringGet = func(service, user string) (string, error) {
+		assert.True(t, service == keyringServiceName(f.hostname), "unexpected keyring service")
+		f.assertUnchanged(t)
+		return keyring.Get(service, user)
+	}
+	f.authCfg.keyringSet = func(service, user, secret string) error {
+		assert.True(t, service == keyringServiceName(f.hostname), "unexpected keyring service")
+		setUsers = append(setUsers, user)
+		setSecrets = append(setSecrets, secret)
+		switch len(setUsers) {
+		case 1:
+			assert.True(t, user == "" && secret == f.targetToken, "active replacement used an unexpected provider value")
+			return keyring.Set(service, user, secret)
+		case 2:
+			assert.True(t, user == "" && secret == f.activeToken, "active rollback used an unexpected provider value")
+			return errSyntheticLogoutActiveRollbackDenied
+		case 3:
+			assert.True(t, user == f.activeUser && secret == f.activeToken, "departing rollback used an unexpected provider value")
+			return errSyntheticLogoutDepartingRollbackDenied
+		default:
+			return errSyntheticLogoutDepartingRollbackDenied
+		}
+	}
+	f.authCfg.keyringDelete = func(service, user string) error {
+		assert.True(t, service == keyringServiceName(f.hostname), "unexpected keyring service")
+		f.assertUnchanged(t)
+		deletes = append(deletes, user)
+		return keyring.Delete(service, user)
+	}
+
+	err := f.authCfg.Logout(f.hostname, f.activeUser)
+
+	assert.True(t, len(setUsers) == 3 && setUsers[0] == "" && setUsers[1] == "" && setUsers[2] == f.activeUser, "active rollback did not attempt every mutated provider slot")
+	assert.True(t, len(setSecrets) == 3 && setSecrets[0] == f.targetToken && setSecrets[1] == f.activeToken && setSecrets[2] == f.activeToken, "active rollback used unexpected provider credentials")
+	assertSyntheticStringSlice(t, []string{f.activeUser}, deletes, "active two-user delete sequence changed")
+	f.assertUnchanged(t)
+	assertLogoutErrorSecretFree(t, err, f.activeUser, f.targetUser, f.activeToken, f.targetToken)
+	requireAutomicVaultCredentialErrors(t, err, errSyntheticLogoutConfigWriteDenied, errSyntheticLogoutActiveRollbackDenied, errSyntheticLogoutDepartingRollbackDenied)
 }
