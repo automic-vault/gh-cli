@@ -9,6 +9,7 @@ import (
 
 	"github.com/cli/cli/v2/internal/config"
 	"github.com/cli/cli/v2/internal/gh"
+	"github.com/cli/cli/v2/internal/keyring"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
@@ -18,7 +19,7 @@ import (
 var errSyntheticVaultStatus = errors.New("synthetic Vault retrieval denied")
 var errSyntheticInactiveVaultStatus = errors.New("synthetic Vault retrieval denied for inactive account")
 var errSyntheticExcludedVaultStatus = errors.New("synthetic Vault retrieval denied for excluded host")
-var errSyntheticInactiveStatusNotFound = errors.New("synthetic inactive credential not found")
+var errSyntheticInactiveStatusNotFound = &syntheticStatusNotFoundError{cause: keyring.ErrNotFound}
 
 type markedStatusVaultError struct {
 	cause error
@@ -36,8 +37,20 @@ func (*markedStatusVaultError) IsAutomicVaultCredentialResolution() bool {
 	return true
 }
 
+type outerStatusVaultError struct {
+	cause error
+}
+
+func (e *outerStatusVaultError) Error() string {
+	return "synthetic outer Vault retrieval failure: " + e.cause.Error()
+}
+
+func (e *outerStatusVaultError) Unwrap() error {
+	return e.cause
+}
+
 func markStatusVaultError(cause error) error {
-	return &markedStatusVaultError{cause: cause}
+	return &outerStatusVaultError{cause: &markedStatusVaultError{cause: cause}}
 }
 
 type statusVaultResolutionMarker interface {
@@ -45,6 +58,29 @@ type statusVaultResolutionMarker interface {
 }
 
 var _ statusVaultResolutionMarker = (*markedStatusVaultError)(nil)
+
+type syntheticStatusNotFoundError struct {
+	cause error
+}
+
+func (e *syntheticStatusNotFoundError) Error() string {
+	return "synthetic inactive credential absence"
+}
+
+func (e *syntheticStatusNotFoundError) Unwrap() error {
+	return e.cause
+}
+
+func TestMarkedStatusVaultErrorPreservesMarkerAndCauseThroughOuterWrapper(t *testing.T) {
+	err := markStatusVaultError(errSyntheticVaultStatus)
+	_, directlyMarked := err.(statusVaultResolutionMarker)
+	assert.False(t, directlyMarked)
+
+	var marker statusVaultResolutionMarker
+	assert.True(t, errors.As(err, &marker))
+	assert.True(t, marker.IsAutomicVaultCredentialResolution())
+	assert.ErrorIs(t, err, errSyntheticVaultStatus)
+}
 
 type statusResolutionCall struct {
 	kind     string
@@ -730,10 +766,11 @@ func TestStatusRunErrorAwareAbsenceRetainsProvider401Behavior(t *testing.T) {
 
 type inactiveAbsenceStatusAuthConfig struct {
 	*config.AuthConfig
-	legacyCalls   int
-	resolverCalls int
-	inactiveCalls int
-	resolution    []statusResolutionCall
+	legacyCalls       int
+	resolverCalls     int
+	inactiveCalls     int
+	resolution        []statusResolutionCall
+	lastInactiveError error
 }
 
 var _ gh.AuthConfig = (*inactiveAbsenceStatusAuthConfig)(nil)
@@ -764,7 +801,8 @@ func (c *inactiveAbsenceStatusAuthConfig) UsersForHost(string) []string {
 func (c *inactiveAbsenceStatusAuthConfig) TokenForUser(hostname, username string) (string, string, error) {
 	c.inactiveCalls++
 	c.resolution = append(c.resolution, statusResolutionCall{kind: "inactive", hostname: hostname, username: username})
-	return "", "", errSyntheticInactiveStatusNotFound
+	c.lastInactiveError = errSyntheticInactiveStatusNotFound
+	return "", "default", c.lastInactiveError
 }
 
 type statusActiveThenUnauthorizedTransport struct {
@@ -816,6 +854,7 @@ func TestStatusRunInactiveCredentialAbsenceRetainsInvalidCredentialBehavior(t *t
 	assert.Empty(t, stdout.String())
 	assert.Contains(t, output, "synthetic-inactive-absence-active-account")
 	assert.Contains(t, output, "synthetic-inactive-absence-account")
+	assert.Contains(t, output, "default")
 	assert.Contains(t, output, "active account: false")
 	assert.Contains(t, output, "invalid")
 	assert.Contains(t, output, "re-authenticate")
@@ -825,10 +864,14 @@ func TestStatusRunInactiveCredentialAbsenceRetainsInvalidCredentialBehavior(t *t
 		"retrieval",
 		"synthetic-inactive-absence-poison-token",
 		"synthetic-inactive-absence-poison-source",
+		"synthetic inactive credential absence",
 		"undefined",
 	} {
 		assert.NotContains(t, output, forbidden)
 	}
+	var marker statusVaultResolutionMarker
+	assert.ErrorIs(t, authCfg.lastInactiveError, keyring.ErrNotFound)
+	assert.False(t, errors.As(authCfg.lastInactiveError, &marker))
 	assert.Equal(t, []statusResolutionCall{
 		{kind: "active", hostname: "github.com"},
 		{kind: "inactive", hostname: "github.com", username: "synthetic-inactive-absence-account"},
