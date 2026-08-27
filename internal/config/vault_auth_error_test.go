@@ -16,6 +16,7 @@ type activeTokenWithError interface {
 
 var errMissingActiveTokenWithError = errors.New("ActiveTokenWithError is not implemented")
 var errSyntheticVaultDenied = errors.New("synthetic Vault access denied")
+var errSyntheticTokenForUserVaultDenied = errors.New("synthetic Vault access denied for selected account")
 
 // vaultCredentialResolutionError is the runtime contract for the production
 // error type. Keeping this as an interface lets the RED suite compile before
@@ -159,4 +160,29 @@ func TestActiveTokenWithErrorPrioritizesEnvironmentToken(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "synthetic-environment-token", token)
 	require.Equal(t, "GH_TOKEN", source)
+}
+
+func TestTokenForUserClassifiesOperationalKeyringFailure(t *testing.T) {
+	authCfg := newTestAuthConfig(t)
+	keyring.MockInitWithError(errSyntheticTokenForUserVaultDenied)
+	t.Cleanup(keyring.MockInit)
+
+	token, source, err := authCfg.TokenForUser("github.com", "synthetic-account")
+
+	require.Empty(t, token)
+	require.Empty(t, source)
+	var resolutionErr *AutomicVaultCredentialResolutionError
+	require.ErrorAs(t, err, &resolutionErr)
+	require.Equal(t, "Automic Vault credential resolution failed", resolutionErr.Error())
+	require.ErrorIs(t, err, errSyntheticTokenForUserVaultDenied)
+	require.NotContains(t, err.Error(), "synthetic-account")
+}
+
+func TestTokenForUserNotFoundPreservesKeyringAbsenceIdentity(t *testing.T) {
+	authCfg := newTestAuthConfig(t)
+
+	_, _, err := authCfg.TokenForUser("github.com", "synthetic-account")
+
+	require.ErrorIs(t, err, keyring.ErrNotFound)
+	require.EqualError(t, err, "no token found for 'synthetic-account'")
 }
