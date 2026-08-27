@@ -120,8 +120,43 @@ func assertFollowupHostsUnchanged(t *testing.T, authCfg *AuthConfig, readConfigs
 	assert.True(t, bytes.Equal(beforeBytes, snapshotHostsConfig(t, readConfigs)), "serialized hosts state changed")
 }
 
+func assertFollowupSerializedHostsUnchanged(t *testing.T, authCfg *AuthConfig, readConfigs func(io.Writer, io.Writer), beforeKeys []string, beforeBytes []byte) {
+	t.Helper()
+	require.NoError(t, ghConfig.Write(authCfg.cfg))
+	afterKeys, err := authCfg.cfg.Keys([]string{hostsKey})
+	require.NoError(t, err)
+	assert.Equal(t, beforeKeys, afterKeys, "serialized repair changed host key order")
+	assert.True(t, bytes.Equal(beforeBytes, snapshotHostsConfig(t, readConfigs)), "serialized repair changed hosts state")
+}
+
+func snapshotFollowupKeyring(t *testing.T, service string, users ...string) map[string]string {
+	t.Helper()
+	state := make(map[string]string, len(users))
+	for _, user := range users {
+		token, err := keyring.Get(service, user)
+		if errors.Is(err, keyring.ErrNotFound) {
+			continue
+		}
+		require.NoError(t, err)
+		state[followupProviderKey(service, user)] = token
+	}
+	return state
+}
+
+func assertFollowupErrorSecretFree(t *testing.T, err error, forbidden ...string) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+	for _, value := range forbidden {
+		assert.NotContains(t, err.Error(), value, "credential operation error contains synthetic credential or account material")
+	}
+}
+
 func TestConfigRepairWriteFailureRemainsLocalWhenProviderRollbackSucceeds(t *testing.T) {
 	f := newSecureAuthSwitchFixture(t)
+	service := keyringServiceName(f.hostname)
+	beforeProvider := snapshotFollowupKeyring(t, service, "", f.activeUser, f.targetUser)
 	var repairCalls int
 	f.authCfg.configWrite = func() error {
 		return errSyntheticFollowupInitialRepairWrite
@@ -135,6 +170,8 @@ func TestConfigRepairWriteFailureRemainsLocalWhenProviderRollbackSucceeds(t *tes
 
 	assert.Equal(t, 1, repairCalls, "config repair was not attempted exactly once")
 	f.assertUnchanged(t)
+	afterProvider := snapshotFollowupKeyring(t, service, "", f.activeUser, f.targetUser)
+	assert.Equal(t, beforeProvider, afterProvider, "provider state was not fully restored after local repair failure")
 	assertLogoutErrorSecretFree(t, err, f.activeUser, f.targetUser, f.activeToken, f.targetToken)
 	require.ErrorIs(t, err, errSyntheticFollowupInitialRepairWrite)
 	require.ErrorIs(t, err, errSyntheticFollowupRepairWrite)
@@ -178,15 +215,21 @@ func TestSwitchUserWriteFailureRestoresActualDriftedHostwideCredential(t *testin
 	const targetUser = "synthetic-followup-target-account"
 	service := keyringServiceName(host)
 	provider.values[followupProviderKey(service, "")] = "synthetic-followup-hostwide-token"
+	beforeProvider := maps.Clone(provider.values)
 	authCfg.configWrite = func() error {
 		return errSyntheticFollowupDriftWrite
 	}
 
 	err := authCfg.SwitchUser(host, targetUser)
 
+	assert.Equal(t, beforeProvider, maps.Clone(provider.values), "provider state was not fully restored after host-wide drift rollback")
 	assert.Equal(t, "synthetic-followup-hostwide-token", provider.values[followupProviderKey(service, "")], "rollback restored the account token instead of the actual host-wide token")
 	assert.Equal(t, "synthetic-followup-account-token", provider.values[followupProviderKey(service, activeUser)], "active account credential changed")
 	assert.Equal(t, "synthetic-followup-target-token", provider.values[followupProviderKey(service, targetUser)], "target account credential changed")
+	assert.Same(t, errSyntheticFollowupDriftWrite, err, "host-wide drift write failure was not returned unchanged")
+	assertFollowupErrorSecretFree(t, err, activeUser, targetUser, "synthetic-followup-account-token", "synthetic-followup-target-token", "synthetic-followup-hostwide-token")
+	var resolutionErr *AutomicVaultCredentialResolutionError
+	assert.False(t, errors.As(err, &resolutionErr), "local host-wide drift write failure was mislabeled as a Vault failure")
 	require.ErrorIs(t, err, errSyntheticFollowupDriftWrite)
 }
 
@@ -195,23 +238,33 @@ func TestSwitchUserWriteFailureLeavesHostwideCredentialAbsent(t *testing.T) {
 	const host = "github.com"
 	const targetUser = "synthetic-followup-target-account"
 	service := keyringServiceName(host)
+	beforeProvider := maps.Clone(provider.values)
 	authCfg.configWrite = func() error {
 		return errSyntheticFollowupAbsentWrite
 	}
 
 	err := authCfg.SwitchUser(host, targetUser)
 
+	assert.Equal(t, beforeProvider, maps.Clone(provider.values), "provider state was not fully restored after absent host-wide rollback")
 	_, present := provider.values[followupProviderKey(service, "")]
 	assert.False(t, present, "rollback created a host-wide credential that was originally absent")
+	assert.Same(t, errSyntheticFollowupAbsentWrite, err, "absent host-wide write failure was not returned unchanged")
+	assertFollowupErrorSecretFree(t, err, targetUser, "synthetic-followup-account-token", "synthetic-followup-target-token")
+	var resolutionErr *AutomicVaultCredentialResolutionError
+	assert.False(t, errors.As(err, &resolutionErr), "local absent host-wide write failure was mislabeled as a Vault failure")
 	require.ErrorIs(t, err, errSyntheticFollowupAbsentWrite)
 }
 
 func TestSwitchUserHostwideReadFailureStopsBeforeTargetResolution(t *testing.T) {
-	authCfg, _, provider := setupFollowupMultiHostConfig(t, false)
+	authCfg, readConfigs, provider := setupFollowupMultiHostConfig(t, false)
 	const host = "github.com"
 	const targetUser = "synthetic-followup-target-account"
 	service := keyringServiceName(host)
 	provider.getErrors[followupProviderKey(service, "")] = errSyntheticFollowupHostwideGet
+	beforeKeys, err := authCfg.cfg.Keys([]string{hostsKey})
+	require.NoError(t, err)
+	beforeBytes := snapshotHostsConfig(t, readConfigs)
+	beforeProvider := maps.Clone(provider.values)
 	var hostwideGets, targetGets, sets, deletes, writes int
 	originalGet := provider.get
 	authCfg.keyringGet = func(service, user string) (string, error) {
@@ -236,13 +289,17 @@ func TestSwitchUserHostwideReadFailureStopsBeforeTargetResolution(t *testing.T) 
 		return nil
 	}
 
-	err := authCfg.SwitchUser(host, targetUser)
+	err = authCfg.SwitchUser(host, targetUser)
 
+	assert.Equal(t, beforeProvider, maps.Clone(provider.values), "provider state changed after host-wide read failure")
 	assert.Equal(t, 1, hostwideGets, "host-wide active slot was not read before switching")
 	assert.Equal(t, 0, targetGets, "target resolution ran after an unhandled host-wide read failure")
 	assert.Equal(t, 0, sets, "provider write ran after an unhandled host-wide read failure")
 	assert.Equal(t, 0, deletes, "provider delete ran after an unhandled host-wide read failure")
 	assert.Equal(t, 0, writes, "config write ran after an unhandled host-wide read failure")
+	assertFollowupHostsUnchanged(t, authCfg, readConfigs, beforeKeys, beforeBytes)
+	assertFollowupSerializedHostsUnchanged(t, authCfg, readConfigs, beforeKeys, beforeBytes)
+	assertFollowupErrorSecretFree(t, err, targetUser, "synthetic-followup-account-token", "synthetic-followup-target-token")
 	requireAutomicVaultCredentialError(t, err, errSyntheticFollowupHostwideGet)
 }
 
@@ -291,6 +348,8 @@ func TestSwitchUserPreMutationFailuresPreserveMultiHostState(t *testing.T) {
 			assert.Equal(t, 0, writes, "config write ran during a pre-mutation provider failure")
 			assert.Equal(t, 0, repairs, "config repair ran during a pre-mutation provider failure")
 			assert.Equal(t, beforeProvider, maps.Clone(provider.values), "provider state changed during a pre-mutation failure")
+			assertFollowupSerializedHostsUnchanged(t, authCfg, readConfigs, beforeKeys, beforeBytes)
+			assertFollowupErrorSecretFree(t, err, targetUser, "synthetic-followup-account-token", "synthetic-followup-target-token")
 			requireAutomicVaultCredentialError(t, err, tt.cause)
 		})
 	}
@@ -302,6 +361,7 @@ func TestSwitchUserMultiHostWriteFailurePreservesHostOrder(t *testing.T) {
 	const targetUser = "synthetic-followup-target-account"
 	service := keyringServiceName(host)
 	provider.values[followupProviderKey(service, "")] = "synthetic-followup-hostwide-token"
+	beforeProvider := maps.Clone(provider.values)
 	beforeKeys, err := authCfg.cfg.Keys([]string{hostsKey})
 	require.NoError(t, err)
 	beforeBytes := snapshotHostsConfig(t, readConfigs)
@@ -312,14 +372,13 @@ func TestSwitchUserMultiHostWriteFailurePreservesHostOrder(t *testing.T) {
 	err = authCfg.SwitchUser(host, targetUser)
 
 	assertFollowupHostsUnchanged(t, authCfg, readConfigs, beforeKeys, beforeBytes)
+	assert.Equal(t, beforeProvider, maps.Clone(provider.values), "provider state was not fully restored after multi-host write failure")
+	assert.Same(t, errSyntheticFollowupMultiHostWrite, err, "multi-host local write failure was not returned unchanged")
+	assertFollowupErrorSecretFree(t, err, targetUser, "synthetic-followup-account-token", "synthetic-followup-target-token", "synthetic-followup-hostwide-token")
+	var resolutionErr *AutomicVaultCredentialResolutionError
+	assert.False(t, errors.As(err, &resolutionErr), "multi-host local write failure was mislabeled as a Vault failure")
 	require.ErrorIs(t, err, errSyntheticFollowupMultiHostWrite)
 	// Force the in-memory tree through the real isolated writer as a second
 	// serialization check; this does not contact a live service.
-	require.NoError(t, ghConfig.Write(authCfg.cfg))
-	assert.Equal(t, beforeKeys, func() []string {
-		keys, keyErr := authCfg.cfg.Keys([]string{hostsKey})
-		require.NoError(t, keyErr)
-		return keys
-	}(), "host key order changed after serialized repair")
-	assert.True(t, bytes.Equal(beforeBytes, snapshotHostsConfig(t, readConfigs)), "serialized multi-host tree changed after repair")
+	assertFollowupSerializedHostsUnchanged(t, authCfg, readConfigs, beforeKeys, beforeBytes)
 }
