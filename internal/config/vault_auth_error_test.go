@@ -228,6 +228,7 @@ func requireAutomicVaultCredentialError(t *testing.T, err, cause error) {
 	if !assert.Error(t, err, "credential operation did not return an error") {
 		return
 	}
+	assert.True(t, err.Error() == "Automic Vault credential resolution failed", "credential operation error did not use the stable public diagnostic")
 	var resolutionErr *AutomicVaultCredentialResolutionError
 	if !assert.True(t, errors.As(err, &resolutionErr), "credential operation error was not classified") {
 		return
@@ -241,6 +242,7 @@ func requireAutomicVaultCredentialErrors(t *testing.T, err error, causes ...erro
 	if !assert.Error(t, err, "credential operation did not return an error") {
 		return
 	}
+	assert.True(t, err.Error() == "Automic Vault credential resolution failed", "credential operation error did not use the stable public diagnostic")
 	var resolutionErr *AutomicVaultCredentialResolutionError
 	if !assert.True(t, errors.As(err, &resolutionErr), "credential operation error was not classified") {
 		return
