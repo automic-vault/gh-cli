@@ -15,18 +15,22 @@ var errSyntheticVaultDenied = errors.New("synthetic Vault access denied")
 // exposes a legacy token so that an implementation which ignores the new error
 // will make a visible network request.
 type dualTokenConfig struct {
-	legacyToken  string
-	legacySource string
-	token        string
-	source       string
-	err          error
+	legacyToken   string
+	legacySource  string
+	legacyCalls   int
+	token         string
+	source        string
+	resolverCalls int
+	err           error
 }
 
-func (c dualTokenConfig) ActiveToken(string) (string, string) {
+func (c *dualTokenConfig) ActiveToken(string) (string, string) {
+	c.legacyCalls++
 	return c.legacyToken, c.legacySource
 }
 
-func (c dualTokenConfig) ActiveTokenWithError(string) (string, string, error) {
+func (c *dualTokenConfig) ActiveTokenWithError(string) (string, string, error) {
+	c.resolverCalls++
 	return c.token, c.source, c.err
 }
 
@@ -70,9 +74,11 @@ func (t *countingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 func TestAddAuthTokenHeaderVaultCredentialResolution(t *testing.T) {
 	t.Run("operational Vault error never falls back or reaches network", func(t *testing.T) {
 		transport := &countingRoundTripper{}
-		cfg := dualTokenConfig{
+		cfg := &dualTokenConfig{
 			legacyToken:  "synthetic-legacy-token",
 			legacySource: "legacy-host-slot",
+			token:        "synthetic-poison-token",
+			source:       "synthetic-poison-source",
 			err:          errSyntheticVaultDenied,
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://api.github.com/repos/cli/cli", nil)
@@ -80,10 +86,10 @@ func TestAddAuthTokenHeaderVaultCredentialResolution(t *testing.T) {
 		res, err := AddAuthTokenHeader(transport, cfg).RoundTrip(req)
 
 		if !errors.Is(err, errSyntheticVaultDenied) {
-			t.Fatalf("expected Vault retrieval error, got %v", err)
+			t.Errorf("expected Vault retrieval error, got %v", err)
 		}
 		if res != nil {
-			t.Fatalf("expected no HTTP response after local credential failure, got status %d", res.StatusCode)
+			t.Errorf("expected no HTTP response after local credential failure, got status %d", res.StatusCode)
 		}
 		if transport.calls != 0 {
 			t.Fatalf("expected zero network requests after Vault retrieval failure, got %d", transport.calls)
@@ -91,11 +97,17 @@ func TestAddAuthTokenHeaderVaultCredentialResolution(t *testing.T) {
 		if transport.authorization != "" {
 			t.Fatalf("expected no authorization header after Vault retrieval failure, got %q", transport.authorization)
 		}
+		if cfg.legacyCalls != 0 {
+			t.Errorf("expected zero legacy resolver calls after Vault retrieval failure, got %d", cfg.legacyCalls)
+		}
+		if cfg.resolverCalls != 1 {
+			t.Errorf("expected one error-aware resolver call after Vault retrieval failure, got %d", cfg.resolverCalls)
+		}
 	})
 
 	t.Run("account not found permits the intentional legacy fallback", func(t *testing.T) {
 		transport := &countingRoundTripper{}
-		cfg := dualTokenConfig{
+		cfg := &dualTokenConfig{
 			legacyToken:  "synthetic-legacy-token",
 			legacySource: "legacy-host-slot",
 			token:        "synthetic-legacy-token",
@@ -117,11 +129,17 @@ func TestAddAuthTokenHeaderVaultCredentialResolution(t *testing.T) {
 		if transport.authorization != "token synthetic-legacy-token" {
 			t.Fatalf("expected legacy authorization header, got %q", transport.authorization)
 		}
+		if cfg.legacyCalls != 0 {
+			t.Errorf("expected zero legacy resolver calls for a compatible fallback, got %d", cfg.legacyCalls)
+		}
+		if cfg.resolverCalls != 1 {
+			t.Errorf("expected one error-aware resolver call for a compatible fallback, got %d", cfg.resolverCalls)
+		}
 	})
 
 	t.Run("both credential slots absent permit an anonymous request", func(t *testing.T) {
 		transport := &countingRoundTripper{}
-		cfg := dualTokenConfig{}
+		cfg := &dualTokenConfig{}
 		req := httptest.NewRequest(http.MethodGet, "https://api.github.com/meta", nil)
 
 		res, err := AddAuthTokenHeader(transport, cfg).RoundTrip(req)
@@ -137,6 +155,12 @@ func TestAddAuthTokenHeaderVaultCredentialResolution(t *testing.T) {
 		}
 		if transport.authorization != "" {
 			t.Fatalf("expected no authorization header for anonymous request, got %q", transport.authorization)
+		}
+		if cfg.legacyCalls != 0 {
+			t.Errorf("expected zero legacy resolver calls for an anonymous request, got %d", cfg.legacyCalls)
+		}
+		if cfg.resolverCalls != 1 {
+			t.Errorf("expected one error-aware resolver call for an anonymous request, got %d", cfg.resolverCalls)
 		}
 	})
 }
@@ -185,5 +209,53 @@ func TestAddAuthTokenHeaderRecoversAfterTransientVaultFailure(t *testing.T) {
 	}
 	if cfg.resolverCalls != 2 {
 		t.Errorf("expected two error-aware resolution attempts, got %d", cfg.resolverCalls)
+	}
+}
+
+type unauthorizedRoundTripper struct {
+	calls         int
+	authorization string
+}
+
+func (t *unauthorizedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.calls++
+	t.authorization = req.Header.Get(authorization)
+	return &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(http.NoBody),
+		Request:    req,
+	}, nil
+}
+
+func TestAddAuthTokenHeaderPreservesProviderHTTP401AfterSuccessfulResolution(t *testing.T) {
+	transport := &unauthorizedRoundTripper{}
+	cfg := &dualTokenConfig{
+		legacyToken:  "synthetic-poison-token",
+		legacySource: "synthetic-legacy-source",
+		token:        "synthetic-valid-token",
+		source:       "synthetic-keyring",
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://api.github.com/user", nil)
+
+	res, err := AddAuthTokenHeader(transport, cfg).RoundTrip(req)
+
+	if err != nil {
+		t.Errorf("expected the provider success to preserve the transport result, got %v", err)
+	}
+	if res == nil || res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected the real provider HTTP 401 to remain visible, got %#v", res)
+	}
+	if transport.calls != 1 {
+		t.Errorf("expected one authenticated provider response, got %d requests", transport.calls)
+	}
+	if transport.authorization != "token synthetic-valid-token" {
+		t.Errorf("expected the error-aware token in the Authorization header, got %q", transport.authorization)
+	}
+	if cfg.legacyCalls != 0 {
+		t.Errorf("expected zero legacy resolver calls for a successful provider result, got %d", cfg.legacyCalls)
+	}
+	if cfg.resolverCalls != 1 {
+		t.Errorf("expected one error-aware resolver call for a successful provider result, got %d", cfg.resolverCalls)
 	}
 }

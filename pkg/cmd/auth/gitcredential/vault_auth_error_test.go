@@ -3,6 +3,7 @@ package login
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -52,12 +53,14 @@ func TestHelperRunOperationalVaultErrorDoesNotUseLegacyCredential(t *testing.T) 
 	cfg := &dualVaultCredentialConfig{
 		legacyToken:  "synthetic-legacy-token",
 		legacySource: "legacy-host-slot",
+		token:        "synthetic-poison-token",
+		source:       "synthetic-poison-source",
 		err:          errSyntheticGitCredentialVaultDenied,
 		user:         "synthetic-account",
 	}
 	requireErrorAwareGitCredentialConfig(t, cfg)
 
-	ios, stdin, stdout, _ := iostreams.Test()
+	ios, stdin, stdout, stderr := iostreams.Test()
 	fmt.Fprint(stdin, "protocol=https\nhost=github.com\n\n")
 
 	err := helperRun(&CredentialOptions{
@@ -76,6 +79,19 @@ func TestHelperRunOperationalVaultErrorDoesNotUseLegacyCredential(t *testing.T) 
 	}
 	if cfg.resolverCalls != 1 {
 		t.Errorf("expected one error-aware credential lookup after Vault failure, got %d", cfg.resolverCalls)
+	}
+	output := strings.ToLower(stdout.String() + stderr.String())
+	for _, forbidden := range []string{
+		"synthetic-poison-token",
+		"synthetic-poison-source",
+		"synthetic-legacy-token",
+		"synthetic-account",
+		"password=",
+		"undefined",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Errorf("operational Vault failure leaked forbidden protocol material %q in %q", forbidden, output)
+		}
 	}
 	if !errors.Is(err, errSyntheticGitCredentialVaultDenied) {
 		t.Errorf("expected the operational Vault error to propagate, got %T", err)

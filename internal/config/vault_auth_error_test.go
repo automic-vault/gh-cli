@@ -36,7 +36,10 @@ func TestActiveTokenWithErrorOperationalAccountFailureDoesNotUseLegacyCredential
 	keyring.MockInitWithError(errSyntheticVaultDenied)
 	t.Cleanup(keyring.MockInit)
 
-	_, _, err := callActiveTokenWithError(t, authCfg, hostname)
+	token, source, err := callActiveTokenWithError(t, authCfg, hostname)
+	if token != "" || source != "" {
+		t.Errorf("operational Vault failure must not return a token or source, got token=%q source=%q", token, source)
+	}
 	require.ErrorIs(t, err, errSyntheticVaultDenied)
 }
 
