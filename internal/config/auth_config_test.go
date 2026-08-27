@@ -53,6 +53,30 @@ func TestTokenFromKeyringForUserErrorsIfUsernameIsBlank(t *testing.T) {
 	require.ErrorContains(t, err, "username cannot be blank")
 }
 
+func TestActiveTokenWithErrorDistinguishesAbsenceFromProviderFailure(t *testing.T) {
+	t.Run("absence", func(t *testing.T) {
+		authCfg := newTestAuthConfig(t)
+
+		token, source, err := authCfg.ActiveTokenWithError("github.com")
+
+		require.NoError(t, err)
+		require.Empty(t, token)
+		require.Empty(t, source)
+	})
+
+	t.Run("provider failure", func(t *testing.T) {
+		authCfg := newTestAuthConfig(t)
+		providerErr := errors.New("provider unavailable")
+		keyring.MockInitWithError(providerErr)
+
+		token, source, err := authCfg.ActiveTokenWithError("github.com")
+
+		require.ErrorIs(t, err, providerErr)
+		require.Empty(t, token)
+		require.Empty(t, source)
+	})
+}
+
 func TestHasActiveToken(t *testing.T) {
 	// Given the user has logged in for a host
 	authCfg := newTestAuthConfig(t)

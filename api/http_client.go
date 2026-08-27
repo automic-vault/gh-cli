@@ -24,6 +24,7 @@ type HTTPClientOptions struct {
 	InvokingAgent      string
 	CacheTTL           time.Duration
 	Config             config
+	TokenResolver      func(string) (string, error)
 	EnableCache        bool
 	Log                io.Writer
 	LogColorize        bool
@@ -74,7 +75,9 @@ func NewHTTPClient(opts HTTPClientOptions) (*http.Client, error) {
 		return nil, err
 	}
 
-	if opts.Config != nil {
+	if opts.TokenResolver != nil {
+		client.Transport = addAuthTokenHeader(client.Transport, opts.Config, opts.TokenResolver)
+	} else if opts.Config != nil {
 		client.Transport = AddAuthTokenHeader(client.Transport, opts.Config)
 	}
 
@@ -152,6 +155,13 @@ func AddCacheTTLHeader(rt http.RoundTripper, ttl time.Duration) http.RoundTrippe
 
 // AddAuthTokenHeader adds an authentication token header for the host specified by the request.
 func AddAuthTokenHeader(rt http.RoundTripper, cfg config) http.RoundTripper {
+	return addAuthTokenHeader(rt, cfg, func(hostname string) (string, error) {
+		token, _ := cfg.ActiveToken(hostname)
+		return token, nil
+	})
+}
+
+func addAuthTokenHeader(rt http.RoundTripper, cfg config, tokenResolver func(string) (string, error)) http.RoundTripper {
 	return &funcTripper{roundTrip: func(req *http.Request) (*http.Response, error) {
 		// If the header is already set in the request, don't overwrite it.
 		if req.Header.Get(authorization) != "" {
@@ -170,15 +180,21 @@ func AddAuthTokenHeader(rt http.RoundTripper, cfg config) http.RoundTripper {
 		}
 
 		hostnameInRequest := ghauth.NormalizeHostname(getHostname(req))
-		token, _ := cfg.ActiveToken(hostnameInRequest)
-		if token == "" {
+		token, err := tokenResolver(hostnameInRequest)
+		if err != nil {
+			return nil, err
+		}
+		if token == "" && cfg != nil {
 			// The request may be aimed at a host's api_host, which gh is
 			// not logged in to and so has no token of its own. Fall back
 			// to the token of the host it stands in for. This only ever
 			// adds a token where there would have been none, so hosts we
 			// already authenticate keep resolving exactly as before.
 			if canonicalHost, ok := cfg.HostForAPIHost(hostnameInRequest); ok {
-				token, _ = cfg.ActiveToken(canonicalHost)
+				token, err = tokenResolver(canonicalHost)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		if token != "" {
