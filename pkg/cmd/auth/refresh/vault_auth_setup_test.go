@@ -20,6 +20,7 @@ import (
 
 var errSyntheticRefreshSetupDenied = errors.New("synthetic credential setup denied")
 var errSyntheticRefreshUnexpectedPostAuthResolution = errors.New("unexpected post-auth credential resolution")
+var errSyntheticRefreshPostLoginActiveUser = errors.New("synthetic post-login active-user resolution")
 
 type refreshSetupAuthConfig struct {
 	*config.AuthConfig
@@ -59,6 +60,7 @@ func (c *refreshSetupAuthConfig) ActiveTokenWithError(string) (string, string, e
 func (c *refreshSetupAuthConfig) ActiveUser(string) (string, error) {
 	if c.loginCalls > 0 {
 		c.postLoginActiveUserCalls++
+		return "synthetic-poison-username", errSyntheticRefreshPostLoginActiveUser
 	}
 	return "synthetic-account", nil
 }
@@ -170,6 +172,7 @@ func requireRefreshSetupOutputSecretFree(t *testing.T, output string) {
 		"synthetic-flow-token",
 		"synthetic-poison-token",
 		"synthetic-poison-source",
+		"synthetic-poison-username",
 		"synthetic-account",
 		"undefined",
 	} {
@@ -195,7 +198,7 @@ func TestRefreshRunInteractiveHTTPSUsesFreshAuthFlowCredentialForSetup(t *testin
 	assert.False(t, errors.Is(err, errSyntheticRefreshUnexpectedPostAuthResolution), "post-auth credential resolution was attempted")
 	assert.NoError(t, err)
 	assert.False(t, output.completedBeforeSetup, "authentication success was reported before credential setup completed")
-	assert.Contains(t, stderr.String(), "Authentication complete.")
+	assert.Equal(t, "✓ Authentication complete.\n", stderr.String())
 	assert.Empty(t, stdout.String())
 	assert.Equal(t, 1, authCfg.preAuthResolverCall)
 	assert.Equal(t, 0, authCfg.postAuthResolverCall)
@@ -211,7 +214,6 @@ func TestRefreshRunInteractiveHTTPSUsesFreshAuthFlowCredentialForSetup(t *testin
 	if assert.Len(t, recorder.approvedInputs, 1) {
 		assert.True(t, bytes.Equal(recorder.approvedInputs[0], []byte("protocol=https\nhost=github.com\nusername=synthetic-account\npassword=synthetic-flow-token\n")), "credential setup did not receive the fresh auth-flow credential")
 	}
-	assert.Equal(t, 1, strings.Count(stderr.String(), "Authentication complete."))
 	requireRefreshSetupOutputSecretFree(t, strings.ToLower(stderr.String()+stdout.String()))
 }
 
@@ -234,7 +236,7 @@ func TestRefreshRunInteractiveHTTPSSetupFailureHasNoSuccessOutput(t *testing.T) 
 
 	assert.False(t, errors.Is(err, errSyntheticRefreshUnexpectedPostAuthResolution), "post-auth credential resolution was attempted")
 	assert.Empty(t, stdout.String())
-	assert.False(t, strings.Contains(stderr.String(), "Authentication complete."), "authentication success was reported after credential setup failed")
+	assert.Equal(t, "", stderr.String(), "authentication success was reported after credential setup failed")
 	assert.False(t, output.completedBeforeSetup, "authentication success was reported before credential setup completed")
 	assert.Equal(t, 1, authCfg.preAuthResolverCall)
 	assert.Equal(t, 0, authCfg.postAuthResolverCall)
@@ -246,8 +248,10 @@ func TestRefreshRunInteractiveHTTPSSetupFailureHasNoSuccessOutput(t *testing.T) 
 	assert.Equal(t, "synthetic-account", authCfg.loginUser)
 	assert.Equal(t, "synthetic-flow-token", authCfg.loginToken)
 	assert.True(t, authCfg.loginSecure)
-	assert.Len(t, recorder.approvedInputs, 1)
-	assert.Equal(t, 0, strings.Count(stderr.String(), "Authentication complete."))
+	assert.Equal(t, []string{"config credential.https://github.com.helper", "credential reject", "credential approve"}, recorder.commands)
+	if assert.Len(t, recorder.approvedInputs, 1) {
+		assert.Equal(t, []byte("protocol=https\nhost=github.com\nusername=synthetic-account\npassword=synthetic-flow-token\n"), recorder.approvedInputs[0])
+	}
 	requireRefreshSetupOutputSecretFree(t, strings.ToLower(combined))
 	assert.ErrorIs(t, err, errSyntheticRefreshSetupDenied)
 }

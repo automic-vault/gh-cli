@@ -68,6 +68,8 @@ func TestTokenFromKeyringUsesTheConfiguredProviderContract(t *testing.T) {
 			require.Empty(t, token)
 			if tt.wantAbsent {
 				require.ErrorIs(t, err, keyring.ErrNotFound)
+				var resolutionErr *AutomicVaultCredentialResolutionError
+				require.False(t, errors.As(err, &resolutionErr))
 				return
 			}
 
@@ -134,6 +136,8 @@ func TestTokenFromKeyringForUserUsesTheConfiguredProviderContract(t *testing.T) 
 			require.Empty(t, token)
 			if tt.wantAbsent {
 				require.ErrorIs(t, err, keyring.ErrNotFound)
+				var resolutionErr *AutomicVaultCredentialResolutionError
+				require.False(t, errors.As(err, &resolutionErr))
 				return
 			}
 
