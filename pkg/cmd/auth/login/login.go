@@ -186,7 +186,9 @@ func loginRun(opts *LoginOptions) error {
 	// https://github.com/cli/go-gh/pull/105
 	hostname = strings.ToLower(hostname)
 
-	if src, writeable := shared.AuthTokenWriteable(authCfg, hostname); !writeable {
+	if src, writeable, err := shared.AuthTokenWriteable(authCfg, hostname); err != nil {
+		return err
+	} else if !writeable {
 		fmt.Fprintf(opts.IO.ErrOut, "The value of the %s environment variable is being used for authentication.\n", src)
 		fmt.Fprint(opts.IO.ErrOut, "To have GitHub CLI store credentials instead, first clear the value from the environment.\n")
 		return cmdutil.SilentError

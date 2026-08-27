@@ -498,16 +498,40 @@ func (c *AuthConfig) restoreProviderMutation(mutation providerMutation) error {
 }
 
 func (c *AuthConfig) rollbackProviderMutations(mutations []providerMutation) []error {
+	return c.rollbackProviderMutationsInOrder(mutations, false)
+}
+
+func (c *AuthConfig) rollbackProviderMutationsReverse(mutations []providerMutation) []error {
+	return c.rollbackProviderMutationsInOrder(mutations, true)
+}
+
+func (c *AuthConfig) rollbackProviderMutationsInOrder(mutations []providerMutation, reverse bool) []error {
 	var rollbackErrors []error
-	for _, mutation := range mutations {
-		if err := c.restoreProviderMutation(mutation); err != nil {
-			rollbackErrors = append(rollbackErrors, err)
+	if reverse {
+		for i := len(mutations) - 1; i >= 0; i-- {
+			if err := c.restoreProviderMutation(mutations[i]); err != nil {
+				rollbackErrors = append(rollbackErrors, err)
+			}
+		}
+	} else {
+		for _, mutation := range mutations {
+			if err := c.restoreProviderMutation(mutation); err != nil {
+				rollbackErrors = append(rollbackErrors, err)
+			}
 		}
 	}
 	return rollbackErrors
 }
 
 func (c *AuthConfig) restoreConfigAfterWriteFailure(snapshot configSnapshot, mutations []providerMutation, writeErr error) error {
+	return c.restoreConfigAfterWriteFailureInOrder(snapshot, mutations, writeErr, false)
+}
+
+func (c *AuthConfig) restoreConfigAfterWriteFailureReverse(snapshot configSnapshot, mutations []providerMutation, writeErr error) error {
+	return c.restoreConfigAfterWriteFailureInOrder(snapshot, mutations, writeErr, true)
+}
+
+func (c *AuthConfig) restoreConfigAfterWriteFailureInOrder(snapshot configSnapshot, mutations []providerMutation, writeErr error, reverse bool) error {
 	localErrors := []error{writeErr}
 	if err := snapshot.restore(c.cfg); err != nil {
 		localErrors = append(localErrors, err)
@@ -524,7 +548,7 @@ func (c *AuthConfig) restoreConfigAfterWriteFailure(snapshot configSnapshot, mut
 			localErrors = append(localErrors, err)
 		}
 	}
-	providerErrors := c.rollbackProviderMutations(mutations)
+	providerErrors := c.rollbackProviderMutationsInOrder(mutations, reverse)
 	if len(providerErrors) == 0 {
 		if len(localErrors) == 1 {
 			return localErrors[0]
@@ -593,28 +617,14 @@ func (c *AuthConfig) SetDefaultHost(host, source string) {
 // If the encrypt option is specified it stores the auth token in encrypted
 // storage. Plain text fallback is intentionally disabled in this build.
 func (c *AuthConfig) Login(hostname, username, token, gitProtocol string, secureStorage bool) (bool, error) {
-	// In this section we set up the users config
-	var setErr error
 	if secureStorage {
-		// Try to set the token for this user in the encrypted storage for later switching
-		// Route through the per-instance seam so transaction callers can keep the
-		// account write and active-slot write under one provider authority. With a
-		// nil seam this remains the existing keyring.Set behavior.
-		setErr = c.setKeyring(keyringServiceName(hostname), username, token)
-		if setErr == nil {
-			// Clean up the previous oauth_token from the config file, if there were one
-			_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username, oauthTokenKey})
-			_ = c.cfg.Remove([]string{hostsKey, hostname, oauthTokenKey})
-		} else {
-			return false, fmt.Errorf("failed to store token in keyring: %w", setErr)
-		}
+		return c.loginSecureStorage(hostname, username, token, gitProtocol)
 	}
-	insecureStorageUsed := false
-	if !secureStorage || setErr != nil {
-		// And set the oauth token under the user for later switching
-		c.cfg.Set([]string{hostsKey, hostname, usersKey, username, oauthTokenKey}, token)
-		insecureStorageUsed = true
-	}
+
+	// In this section we set up the users config
+	// And set the oauth token under the user for later switching
+	c.cfg.Set([]string{hostsKey, hostname, usersKey, username, oauthTokenKey}, token)
+	insecureStorageUsed := true
 
 	if gitProtocol != "" {
 		// Set the host level git protocol
@@ -632,6 +642,59 @@ func (c *AuthConfig) Login(hostname, username, token, gitProtocol string, secure
 
 	// Then we activate the new user
 	return insecureStorageUsed, c.activateUser(hostname, username)
+}
+
+func (c *AuthConfig) loginSecureStorage(hostname, username, token, gitProtocol string) (bool, error) {
+	service := keyringServiceName(hostname)
+	previousAccount, err := c.readKeyringCredential(service, username)
+	if err != nil {
+		return false, err
+	}
+	previousActive, err := c.readKeyringCredential(service, "")
+	if err != nil {
+		return false, err
+	}
+
+	snapshot := newConfigSnapshot(c.cfg, []string{hostsKey})
+	accountMutation := providerMutation{
+		service:  service,
+		user:     username,
+		previous: previousAccount,
+	}
+	if err := c.setKeyring(service, username, token); err != nil {
+		return false, newAutomicVaultCredentialResolutionError(err)
+	}
+
+	activeMutation := providerMutation{
+		service:  service,
+		user:     "",
+		previous: previousActive,
+	}
+	if err := c.setKeyring(service, "", token); err != nil {
+		rollbackErrors := c.rollbackProviderMutations([]providerMutation{accountMutation})
+		if len(rollbackErrors) == 0 {
+			return false, newAutomicVaultCredentialResolutionError(err)
+		}
+		causes := make([]error, 0, len(rollbackErrors)+1)
+		causes = append(causes, err)
+		causes = append(causes, rollbackErrors...)
+		return false, newAutomicVaultCredentialResolutionError(errors.Join(causes...))
+	}
+
+	mutations := []providerMutation{accountMutation, activeMutation}
+	_ = c.cfg.Remove([]string{hostsKey, hostname, usersKey, username, oauthTokenKey})
+	_ = c.cfg.Remove([]string{hostsKey, hostname, oauthTokenKey})
+	if gitProtocol != "" {
+		c.cfg.Set([]string{hostsKey, hostname, gitProtocolKey}, gitProtocol)
+	}
+	if _, getErr := c.cfg.Get([]string{hostsKey, hostname, usersKey, username}); getErr != nil {
+		c.cfg.Set([]string{hostsKey, hostname, usersKey, username}, "")
+	}
+	c.cfg.Set([]string{hostsKey, hostname, userKey}, username)
+	if err := c.writeConfig(); err != nil {
+		return false, c.restoreConfigAfterWriteFailureReverse(snapshot, mutations, err)
+	}
+	return false, nil
 }
 
 func (c *AuthConfig) SwitchUser(hostname, user string) error {

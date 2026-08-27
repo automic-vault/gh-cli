@@ -155,7 +155,9 @@ func switchRun(opts *SwitchOptions) error {
 		username = candidates[selected].user
 	}
 
-	if src, writeable := shared.AuthTokenWriteable(authCfg, hostname); !writeable {
+	if src, writeable, err := shared.AuthTokenWriteable(authCfg, hostname); err != nil {
+		return err
+	} else if !writeable {
 		fmt.Fprintf(opts.IO.ErrOut, "The value of the %s environment variable is being used for authentication.\n", src)
 		fmt.Fprint(opts.IO.ErrOut, "To have GitHub CLI manage credentials instead, first clear the value from the environment.\n")
 		return cmdutil.SilentError

@@ -29,7 +29,10 @@ func AuthTokenRefreshable(token, src string) bool {
 	return token != "" && !strings.HasSuffix(src, "_TOKEN") && strings.HasPrefix(token, "gho_")
 }
 
-func AuthTokenWriteable(authCfg gh.AuthConfig, hostname string) (string, bool) {
-	token, src := authCfg.ActiveToken(hostname)
-	return src, (token == "" || !strings.HasSuffix(src, "_TOKEN"))
+func AuthTokenWriteable(authCfg gh.AuthConfig, hostname string) (string, bool, error) {
+	token, src, err := ResolveActiveToken(authCfg, hostname)
+	if err != nil {
+		return "", false, err
+	}
+	return src, (token == "" || !strings.HasSuffix(src, "_TOKEN")), nil
 }
