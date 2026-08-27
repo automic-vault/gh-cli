@@ -263,6 +263,8 @@ func TestSwitchUserConfigWriteFailureRollsProviderAndConfigBack(t *testing.T) {
 			return f.activeToken, nil
 		case f.targetUser:
 			return f.targetToken, nil
+		case "":
+			return f.activeToken, nil
 		default:
 			return "", keyring.ErrNotFound
 		}
@@ -305,6 +307,8 @@ func TestSwitchUserConfigWriteAndRollbackFailuresRemainClassified(t *testing.T) 
 			return f.activeToken, nil
 		case f.targetUser:
 			return f.targetToken, nil
+		case "":
+			return f.activeToken, nil
 		default:
 			return "", keyring.ErrNotFound
 		}
