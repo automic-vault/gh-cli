@@ -301,10 +301,10 @@ func (c *AuthConfig) optionalTimestamp(path []string) (*time.Time, error) {
 func refreshableFromKeyring(hostname, username string) (gh.Credential, error) {
 	data, err := keyring.Get(refreshableServiceName(hostname), username)
 	if err != nil {
-		// A missing record and an unavailable keyring are both reported as not found
-		// so resolution can fall back to a non-expiring credential, matching how non-expiring
-		// keyring reads are treated during activation.
-		return gh.Credential{}, errRefreshableNotFound
+		if errors.Is(err, keyring.ErrNotFound) {
+			return gh.Credential{}, errRefreshableNotFound
+		}
+		return gh.Credential{}, err
 	}
 	var record refreshableTokenRecord
 	if err := json.Unmarshal([]byte(data), &record); err != nil {

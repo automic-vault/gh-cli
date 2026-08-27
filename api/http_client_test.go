@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +20,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewHTTPClientStopsWhenTokenResolutionFails(t *testing.T) {
+	resolutionErr := errors.New("token resolution failed")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests++
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewHTTPClient(HTTPClientOptions{
+		RefreshingConfig: failingConfig{err: resolutionErr},
+	})
+	require.NoError(t, err)
+
+	_, err = client.Get(server.URL)
+	require.ErrorIs(t, err, resolutionErr)
+	require.Zero(t, requests)
+}
 
 func TestNewHTTPClient(t *testing.T) {
 	type args struct {
@@ -634,6 +653,18 @@ func (c tinyConfig) ActiveTokenWithRefresh(host string) (auth.Credential, auth.R
 func (c tinyConfig) HostForAPIHost(apiHost string) (string, bool) {
 	host, ok := c[fmt.Sprintf("%s:%s", "api_host", apiHost)]
 	return host, ok
+}
+
+type failingConfig struct {
+	err error
+}
+
+func (c failingConfig) ActiveTokenWithRefresh(string) (auth.Credential, auth.RefreshStatus, error) {
+	return auth.Credential{}, auth.RefreshStatusInapplicable, c.err
+}
+
+func (failingConfig) HostForAPIHost(string) (string, bool) {
+	return "", false
 }
 
 // legacyConfig implements the primitive config interface (string return values) that external consumers of this
