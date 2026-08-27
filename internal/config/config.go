@@ -233,29 +233,56 @@ type AuthConfig struct {
 
 // ActiveToken will retrieve the active auth token for the given hostname,
 // searching environment variables and encrypted storage.
+//
+// Callers that need to distinguish an unavailable credential provider from an
+// absent credential should use ActiveTokenWithError. This method preserves the
+// legacy no-error API while ensuring that an operational provider error cannot
+// silently select a different credential.
 func (c *AuthConfig) ActiveToken(hostname string) (string, string) {
-	if c.tokenOverride != nil {
-		return c.tokenOverride(hostname)
-	}
-	token, source := tokenFromEnv(hostname)
-	if token == "" {
-		var user string
-		var err error
-		if user, err = c.ActiveUser(hostname); err == nil {
-			token, err = c.TokenFromKeyringForUser(hostname, user)
-		}
-		if err != nil {
-			// We should generally be able to find a token for the active user,
-			// but in some cases such as if the keyring was set up in a very old
-			// version of the CLI, it may only have a unkeyed token, so fallback
-			// to it.
-			token, err = c.TokenFromKeyring(hostname)
-		}
-		if err == nil {
-			source = "keyring"
-		}
-	}
+	token, source, _ := c.ActiveTokenWithError(hostname)
 	return token, source
+}
+
+// ActiveTokenWithError retrieves the active auth token for the given hostname,
+// returning operational credential-provider errors to the caller.
+//
+// Environment and test overrides intentionally take precedence over keyring
+// resolution. The host-wide keyring slot is a compatibility fallback only when
+// the account-scoped slot is explicitly absent. An operational error is never
+// converted into a fallback lookup or an anonymous result.
+func (c *AuthConfig) ActiveTokenWithError(hostname string) (string, string, error) {
+	if c.tokenOverride != nil {
+		token, source := c.tokenOverride(hostname)
+		return token, source, nil
+	}
+
+	if token, source := tokenFromEnv(hostname); token != "" {
+		return token, source, nil
+	}
+
+	// A host may have no configured active account (for example, before the
+	// multi-account configuration was introduced). In that case there is no
+	// account-scoped slot to resolve, so preserve the host-wide compatibility
+	// lookup below. Once an account is selected, however, only an explicit
+	// keyring.ErrNotFound permits that lookup.
+	if user, err := c.ActiveUser(hostname); err == nil {
+		token, err := c.TokenFromKeyringForUser(hostname, user)
+		if err == nil {
+			return token, "keyring", nil
+		}
+		if !errors.Is(err, keyring.ErrNotFound) {
+			return "", "", fmt.Errorf("failed to retrieve active token: %w", err)
+		}
+	}
+
+	token, err := c.TokenFromKeyring(hostname)
+	if err == nil {
+		return token, "keyring", nil
+	}
+	if errors.Is(err, keyring.ErrNotFound) {
+		return "", "", nil
+	}
+	return "", "", fmt.Errorf("failed to retrieve active token: %w", err)
 }
 
 // HasActiveToken returns true when a token for the hostname is present.

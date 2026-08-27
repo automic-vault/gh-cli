@@ -17,6 +17,10 @@ type tokenGetter interface {
 	ActiveToken(string) (string, string)
 }
 
+type tokenGetterWithError interface {
+	ActiveTokenWithError(string) (string, string, error)
+}
+
 type HTTPClientOptions struct {
 	AppVersion         string
 	InvokingAgent      string
@@ -161,7 +165,15 @@ func AddAuthTokenHeader(rt http.RoundTripper, cfg tokenGetter) http.RoundTripper
 			// If the host has changed during a redirect do not add the authentication token header.
 			if !redirectHostnameChange {
 				hostname := ghauth.NormalizeHostname(getHost(req))
-				if token, _ := cfg.ActiveToken(hostname); token != "" {
+				if resolver, ok := any(cfg).(tokenGetterWithError); ok {
+					token, _, err := resolver.ActiveTokenWithError(hostname)
+					if err != nil {
+						return nil, err
+					}
+					if token != "" {
+						req.Header.Set(authorization, fmt.Sprintf("token %s", token))
+					}
+				} else if token, _ := cfg.ActiveToken(hostname); token != "" {
 					req.Header.Set(authorization, fmt.Sprintf("token %s", token))
 				}
 			}
