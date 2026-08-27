@@ -125,11 +125,6 @@ func NewCmdRefresh(f *cmdutil.Factory, runF func(*RefreshOptions) error) *cobra.
 }
 
 func refreshRun(opts *RefreshOptions) error {
-	plainHTTPClient, err := opts.PlainHttpClient()
-	if err != nil {
-		return err
-	}
-
 	cfg, err := opts.Config()
 	if err != nil {
 		return err
@@ -170,6 +165,12 @@ func refreshRun(opts *RefreshOptions) error {
 	if err != nil {
 		return err
 	}
+
+	plainHTTPClient, err := opts.PlainHttpClient()
+	if err != nil {
+		return err
+	}
+
 	if strings.HasSuffix(activeTokenSource, "_TOKEN") {
 		fmt.Fprintf(opts.IO.ErrOut, "The value of the %s environment variable is being used for authentication.\n", activeTokenSource)
 		fmt.Fprint(opts.IO.ErrOut, "To refresh credentials stored in GitHub CLI, first clear the value from the environment.\n")
@@ -223,19 +224,14 @@ func refreshRun(opts *RefreshOptions) error {
 		return err
 	}
 
-	cs := opts.IO.ColorScheme()
-	fmt.Fprintf(opts.IO.ErrOut, "%s Authentication complete.\n", cs.SuccessIcon())
-
 	if credentialFlow.ShouldSetup() {
-		username, _ := authCfg.ActiveUser(hostname)
-		password, _, err := shared.ResolveActiveToken(authCfg, hostname)
-		if err != nil {
-			return err
-		}
-		if err := credentialFlow.Setup(hostname, username, password); err != nil {
+		if err := credentialFlow.Setup(hostname, string(authedUser), string(authedToken)); err != nil {
 			return err
 		}
 	}
+
+	cs := opts.IO.ColorScheme()
+	fmt.Fprintf(opts.IO.ErrOut, "%s Authentication complete.\n", cs.SuccessIcon())
 
 	return nil
 }

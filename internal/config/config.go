@@ -363,7 +363,14 @@ func (c *AuthConfig) SetActiveToken(token, source string) {
 // TokenFromKeyring will retrieve the auth token for the given hostname,
 // only searching in encrypted storage.
 func (c *AuthConfig) TokenFromKeyring(hostname string) (string, error) {
-	return c.getKeyring(keyringServiceName(hostname), "")
+	token, err := c.getKeyring(keyringServiceName(hostname), "")
+	if err == nil {
+		return token, nil
+	}
+	if errors.Is(err, keyring.ErrNotFound) {
+		return "", err
+	}
+	return "", newAutomicVaultCredentialResolutionError(err)
 }
 
 // TokenFromKeyringForUser will retrieve the auth token for the given hostname
@@ -377,7 +384,14 @@ func (c *AuthConfig) TokenFromKeyringForUser(hostname, username string) (string,
 		return "", errors.New("username cannot be blank")
 	}
 
-	return c.getKeyring(keyringServiceName(hostname), username)
+	token, err := c.getKeyring(keyringServiceName(hostname), username)
+	if err == nil {
+		return token, nil
+	}
+	if errors.Is(err, keyring.ErrNotFound) {
+		return "", err
+	}
+	return "", newAutomicVaultCredentialResolutionError(err)
 }
 
 func (c *AuthConfig) getKeyring(service, user string) (string, error) {
