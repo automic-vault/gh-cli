@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/cli/cli/v2/internal/keyring"
@@ -17,6 +19,7 @@ type activeTokenWithError interface {
 var errMissingActiveTokenWithError = errors.New("ActiveTokenWithError is not implemented")
 var errSyntheticVaultDenied = errors.New("synthetic Vault access denied")
 var errSyntheticTokenForUserVaultDenied = errors.New("synthetic Vault access denied for selected account")
+var errSyntheticLogoutDeleteDenied = errors.New("synthetic Vault delete denied")
 
 // vaultCredentialResolutionError is the runtime contract for the production
 // error type. Keeping this as an interface lets the RED suite compile before
@@ -185,4 +188,110 @@ func TestTokenForUserNotFoundPreservesKeyringAbsenceIdentity(t *testing.T) {
 
 	require.ErrorIs(t, err, keyring.ErrNotFound)
 	require.EqualError(t, err, "no token found for 'synthetic-account'")
+}
+
+func snapshotHostsConfig(t *testing.T, readConfigs func(io.Writer, io.Writer)) []byte {
+	t.Helper()
+	var hosts bytes.Buffer
+	readConfigs(io.Discard, &hosts)
+	return append([]byte(nil), hosts.Bytes()...)
+}
+
+func TestLogoutPreservesStateWhenKeyringDeleteFails(t *testing.T) {
+	cfg, readConfigs := NewIsolatedTestConfig(t, "")
+	authCfg := cfg.Authentication().(*AuthConfig)
+	const hostname = "github.com"
+	const username = "synthetic-account"
+	_, err := authCfg.Login(hostname, username, "synthetic-logout-token", "https", true)
+	require.NoError(t, err)
+
+	beforeHosts := snapshotHostsConfig(t, readConfigs)
+	resolvedToken, resolvedSource, err := authCfg.ActiveTokenWithError(hostname)
+	require.NoError(t, err)
+	require.NotEmpty(t, resolvedToken)
+	require.Equal(t, "keyring", resolvedSource)
+
+	var deleteCalls []string
+	authCfg.keyringDelete = func(_, user string) error {
+		deleteCalls = append(deleteCalls, user)
+		if user == "" {
+			return nil
+		}
+		return errSyntheticLogoutDeleteDenied
+	}
+
+	err = authCfg.Logout(hostname, username)
+
+	// The provider failure must be transactional: no persisted or in-memory
+	// account state may change before the delete succeeds.
+	afterHosts := snapshotHostsConfig(t, readConfigs)
+	require.True(t, bytes.Equal(beforeHosts, afterHosts), "persisted authentication state changed")
+	require.Equal(t, []string{username}, authCfg.UsersForHost(hostname))
+	activeUser, activeUserErr := authCfg.ActiveUser(hostname)
+	require.NoError(t, activeUserErr)
+	require.Equal(t, username, activeUser)
+	require.Equal(t, []string{"", username}, deleteCalls)
+	if err != nil {
+		require.NotContains(t, err.Error(), "synthetic-logout-token")
+		require.NotContains(t, err.Error(), username)
+	}
+	require.Error(t, err)
+	require.ErrorIs(t, err, errSyntheticLogoutDeleteDenied)
+}
+
+func TestLogoutPreservesStateWhenActiveAccountSwitchDeleteFails(t *testing.T) {
+	cfg, readConfigs := NewIsolatedTestConfig(t, "")
+	authCfg := cfg.Authentication().(*AuthConfig)
+	const hostname = "github.com"
+	const activeUser = "synthetic-active-account"
+	const nextUser = "synthetic-next-account"
+	_, err := authCfg.Login(hostname, nextUser, "synthetic-next-token", "https", true)
+	require.NoError(t, err)
+	_, err = authCfg.Login(hostname, activeUser, "synthetic-active-token", "https", true)
+	require.NoError(t, err)
+
+	beforeHosts := snapshotHostsConfig(t, readConfigs)
+	_, resolvedSource, err := authCfg.ActiveTokenWithError(hostname)
+	require.NoError(t, err)
+	require.Equal(t, "keyring", resolvedSource)
+
+	authCfg.keyringDelete = func(_, user string) error {
+		if user == "" {
+			return errSyntheticLogoutDeleteDenied
+		}
+		return nil
+	}
+
+	err = authCfg.Logout(hostname, activeUser)
+
+	afterHosts := snapshotHostsConfig(t, readConfigs)
+	require.True(t, bytes.Equal(beforeHosts, afterHosts), "persisted authentication state changed")
+	require.Equal(t, []string{nextUser, activeUser}, authCfg.UsersForHost(hostname))
+	currentUser, currentUserErr := authCfg.ActiveUser(hostname)
+	require.NoError(t, currentUserErr)
+	require.Equal(t, activeUser, currentUser)
+	if err != nil {
+		require.NotContains(t, err.Error(), "synthetic-active-token")
+		require.NotContains(t, err.Error(), activeUser)
+	}
+	require.Error(t, err)
+	require.ErrorIs(t, err, errSyntheticLogoutDeleteDenied)
+}
+
+func TestLogoutTreatsKeyringDeleteNotFoundAsCompatible(t *testing.T) {
+	cfg, readConfigs := NewIsolatedTestConfig(t, "")
+	authCfg := cfg.Authentication().(*AuthConfig)
+	const hostname = "github.com"
+	const username = "synthetic-account"
+	_, err := authCfg.Login(hostname, username, "synthetic-logout-token", "https", true)
+	require.NoError(t, err)
+	authCfg.keyringDelete = func(string, string) error {
+		return keyring.ErrNotFound
+	}
+
+	err = authCfg.Logout(hostname, username)
+
+	require.NoError(t, err)
+	require.Empty(t, authCfg.UsersForHost(hostname))
+	require.Equal(t, []byte("{}\n"), snapshotHostsConfig(t, readConfigs))
 }
