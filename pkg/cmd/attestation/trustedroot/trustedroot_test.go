@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cli/cli/v2/internal/config"
 	"github.com/cli/cli/v2/internal/gh"
 	ghmock "github.com/cli/cli/v2/internal/gh/mock"
 	"github.com/cli/cli/v2/pkg/cmd/attestation/api"
@@ -207,12 +206,23 @@ func TestGetTrustedRoot(t *testing.T) {
 }
 
 type stubAuthConfig struct {
-	config.AuthConfig
-	hasActiveToken bool
+	gh.AuthConfig
+	hasActiveToken      bool
+	hasActiveTokenCalls int
+	activeTokenCalls    int
 }
 
 var _ gh.AuthConfig = (*stubAuthConfig)(nil)
 
 func (c *stubAuthConfig) HasActiveToken(host string) bool {
+	c.hasActiveTokenCalls++
 	return c.hasActiveToken
+}
+
+func (c *stubAuthConfig) ActiveToken(host string) (string, string) {
+	c.activeTokenCalls++
+	if !c.hasActiveToken {
+		return "", ""
+	}
+	return "synthetic-trusted-root-token", "keyring"
 }
