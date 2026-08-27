@@ -119,6 +119,8 @@ func TestRequireOAuthTokenOperationalVaultFailureIsLocalAndDoesNotUseLegacyOrRun
 		},
 	})
 	cmd.SetArgs([]string{"synthetic"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 	err := cmd.Execute()

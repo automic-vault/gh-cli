@@ -18,11 +18,9 @@ import (
 // NewCmdAgentTask creates the base `agent-task` command.
 func NewCmdAgentTask(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:           "agent-task <command>",
-		Aliases:       []string{"agent-tasks", "agent", "agents"},
-		Short:         "Work with agent tasks (preview)",
-		SilenceErrors: true,
-		SilenceUsage:  true,
+		Use:     "agent-task <command>",
+		Aliases: []string{"agent-tasks", "agent", "agents"},
+		Short:   "Work with agent tasks (preview)",
 		Long: heredoc.Doc(`
 			Working with agent tasks in the GitHub CLI is in preview and
 			subject to change without notice.

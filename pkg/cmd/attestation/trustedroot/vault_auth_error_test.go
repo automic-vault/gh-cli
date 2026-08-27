@@ -177,6 +177,8 @@ func runTrustedRootWithSyntheticAuth(t *testing.T, authCfg gh.AuthConfig, transp
 		result.trustDomain = opts.TrustDomain
 		return nil
 	})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
 	cmd.SetArgs([]string{"--hostname", "foo-bar.ghe.com"})
 	cmd.SetIn(&bytes.Buffer{})
 	cmd.SetOut(stdout)

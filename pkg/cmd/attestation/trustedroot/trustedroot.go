@@ -35,11 +35,9 @@ type tufClientInstantiator func(o *tuf.Options) (*tuf.Client, error)
 func NewTrustedRootCmd(f *cmdutil.Factory, runF func(*Options) error) *cobra.Command {
 	opts := &Options{}
 	trustedRootCmd := cobra.Command{
-		Use:           "trusted-root [--tuf-url <url> --tuf-root <file-path>] [--verify-only]",
-		Args:          cobra.ExactArgs(0),
-		Short:         "Output trusted_root.jsonl contents, likely for offline verification",
-		SilenceErrors: true,
-		SilenceUsage:  true,
+		Use:   "trusted-root [--tuf-url <url> --tuf-root <file-path>] [--verify-only]",
+		Args:  cobra.ExactArgs(0),
+		Short: "Output trusted_root.jsonl contents, likely for offline verification",
 		Long: heredoc.Docf(`
 			Output contents for a trusted_root.jsonl file, likely for offline verification.
 
