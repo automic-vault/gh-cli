@@ -393,6 +393,7 @@ func apiRun(opts *ApiOptions) error {
 	if err != nil {
 		return err
 	}
+	authConfig := cfg.Authentication()
 
 	if opts.HttpClient == nil {
 		opts.HttpClient = api.NewHTTPClient
@@ -405,7 +406,7 @@ func apiRun(opts *ApiOptions) error {
 		AppVersion:        opts.AppVersion,
 		InvokingAgent:     opts.InvokingAgent,
 		CacheTTL:          opts.CacheTTL,
-		RefreshingConfig:  cfg.Authentication(),
+		RefreshingConfig:  authConfig,
 		EnableCache:       opts.CacheTTL > 0,
 		Log:               log,
 		LogColorize:       opts.IO.ColorEnabled(),
@@ -416,7 +417,7 @@ func apiRun(opts *ApiOptions) error {
 		return err
 	}
 
-	host, _ := cfg.Authentication().DefaultHost()
+	host, _ := authConfig.DefaultHost()
 
 	if opts.Hostname != "" {
 		host = opts.Hostname
