@@ -233,6 +233,7 @@ type AuthConfig struct {
 	keyringSet          func(string, string, string) error
 	keyringDelete       func(string, string) error
 	configWrite         func() error
+	configRepairWrite   func() error
 }
 
 // AutomicVaultCredentialResolutionError reports an operational failure while
@@ -514,7 +515,11 @@ func (c *AuthConfig) restoreConfigAfterWriteFailure(snapshot configSnapshot, mut
 	// A test writer is deliberately allowed to fail without touching the
 	// filesystem. For the real writer, retry after restoring the in-memory
 	// snapshot so a partial write is repaired when possible.
-	if c.configWrite == nil {
+	if c.configRepairWrite != nil {
+		if err := c.configRepairWrite(); err != nil {
+			rollbackErrors = append(rollbackErrors, err)
+		}
+	} else if c.configWrite == nil {
 		if err := ghConfig.Write(c.cfg); err != nil {
 			rollbackErrors = append(rollbackErrors, err)
 		}
