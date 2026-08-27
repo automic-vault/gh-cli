@@ -551,11 +551,15 @@ func TestStatusRunPreflightsOrderedHostsAndAccountsBeforeJSONOutput(t *testing.T
 }
 
 type legacyOnlyStatusAuthConfig struct {
-	*config.AuthConfig
+	gh.AuthConfig
 	legacyCalls int
 }
 
 var _ gh.AuthConfig = (*legacyOnlyStatusAuthConfig)(nil)
+
+type statusActiveTokenResolver interface {
+	ActiveTokenWithError(string) (string, string, error)
+}
 
 func (c *legacyOnlyStatusAuthConfig) Hosts() []string {
 	return []string{"github.com"}
@@ -591,7 +595,9 @@ func (t *statusSuccessTransport) RoundTrip(req *http.Request) (*http.Response, e
 }
 
 func TestStatusRunLegacyOnlyAuthConfigRemainsCompatible(t *testing.T) {
-	authCfg := &legacyOnlyStatusAuthConfig{AuthConfig: &config.AuthConfig{}}
+	authCfg := &legacyOnlyStatusAuthConfig{}
+	_, implementsResolver := any(authCfg).(statusActiveTokenResolver)
+	assert.False(t, implementsResolver, "legacy-only fixture must not gain a promoted error-aware resolver")
 	mockConfig := config.NewMockConfigFromString("")
 	mockConfig.AuthenticationFunc = func() gh.AuthConfig {
 		return authCfg
@@ -697,12 +703,13 @@ func TestStatusRunErrorAwareAbsenceRetainsProvider401Behavior(t *testing.T) {
 
 type filterStatusAuthConfig struct {
 	*config.AuthConfig
-	legacyCalls     int
-	resolverCalls   int
-	inactiveCalls   int
-	resolution      []statusResolutionCall
-	activeErrorHost string
-	ignoredError    error
+	legacyCalls       int
+	resolverCalls     int
+	inactiveCalls     int
+	resolution        []statusResolutionCall
+	activeErrorHost   string
+	inactiveErrorHost string
+	ignoredError      error
 }
 
 var _ gh.AuthConfig = (*filterStatusAuthConfig)(nil)
@@ -726,18 +733,21 @@ func (c *filterStatusAuthConfig) ActiveTokenWithError(hostname string) (string, 
 	return "synthetic-filter-active-token", "synthetic-filter-source", nil
 }
 
-func (c *filterStatusAuthConfig) ActiveUser(string) (string, error) {
-	return "synthetic-filter-active-account", nil
+func (c *filterStatusAuthConfig) ActiveUser(hostname string) (string, error) {
+	return "synthetic-filter-active-account-" + hostname, nil
 }
 
 func (c *filterStatusAuthConfig) UsersForHost(hostname string) []string {
-	return []string{"synthetic-filter-inactive-" + hostname}
+	return []string{"synthetic-filter-inactive-account-" + hostname}
 }
 
 func (c *filterStatusAuthConfig) TokenForUser(hostname, username string) (string, string, error) {
 	c.inactiveCalls++
 	c.resolution = append(c.resolution, statusResolutionCall{kind: "inactive", hostname: hostname, username: username})
-	return "synthetic-filter-inactive-poison-token", "synthetic-filter-inactive-poison-source", c.ignoredError
+	if hostname == c.inactiveErrorHost {
+		return "synthetic-filter-inactive-poison-token", "synthetic-filter-inactive-poison-source", c.ignoredError
+	}
+	return "synthetic-filter-inactive-token-" + hostname, "synthetic-filter-source-" + hostname, nil
 }
 
 func runFilterStatus(t *testing.T, opts StatusOptions, authCfg *filterStatusAuthConfig) (stdout, stderr string, clientCalls, transportCalls int, err error) {
@@ -766,8 +776,9 @@ func runFilterStatus(t *testing.T, opts StatusOptions, authCfg *filterStatusAuth
 
 func TestStatusRunActiveFilterDoesNotResolveIgnoredInactiveAccounts(t *testing.T) {
 	authCfg := &filterStatusAuthConfig{
-		AuthConfig:   &config.AuthConfig{},
-		ignoredError: errSyntheticInactiveVaultStatus,
+		AuthConfig:        &config.AuthConfig{},
+		inactiveErrorHost: "github.com",
+		ignoredError:      errSyntheticInactiveVaultStatus,
 	}
 	stdout, stderr, clientCalls, transportCalls, err := runFilterStatus(t, StatusOptions{Active: true}, authCfg)
 
@@ -790,9 +801,10 @@ func TestStatusRunActiveFilterDoesNotResolveIgnoredInactiveAccounts(t *testing.T
 
 func TestStatusRunHostnameFilterDoesNotResolveExcludedHost(t *testing.T) {
 	authCfg := &filterStatusAuthConfig{
-		AuthConfig:      &config.AuthConfig{},
-		activeErrorHost: "github.com",
-		ignoredError:    errSyntheticInactiveVaultStatus,
+		AuthConfig:        &config.AuthConfig{},
+		activeErrorHost:   "github.com",
+		inactiveErrorHost: "github.com",
+		ignoredError:      errSyntheticExcludedVaultStatus,
 	}
 	stdout, stderr, clientCalls, transportCalls, err := runFilterStatus(t, StatusOptions{Hostname: "alpha.example.com"}, authCfg)
 
@@ -801,13 +813,24 @@ func TestStatusRunHostnameFilterDoesNotResolveExcludedHost(t *testing.T) {
 	assert.NotEmpty(t, stdout)
 	assert.Equal(t, 1, authCfg.resolverCalls)
 	assert.Equal(t, 0, authCfg.legacyCalls)
-	assert.Equal(t, 0, authCfg.inactiveCalls)
+	assert.Equal(t, 1, authCfg.inactiveCalls)
 	assert.Equal(t, []statusResolutionCall{
 		{kind: "active", hostname: "alpha.example.com"},
+		{kind: "inactive", hostname: "alpha.example.com", username: "synthetic-filter-inactive-account-alpha.example.com"},
 	}, authCfg.resolution)
 	assert.Equal(t, 1, clientCalls)
-	assert.Equal(t, 1, transportCalls)
+	assert.Equal(t, 2, transportCalls)
 	output := strings.ToLower(stdout + stderr)
-	assert.Contains(t, output, "synthetic-filter-active-account")
-	assert.NotContains(t, output, "synthetic-filter-inactive")
+	assert.Contains(t, output, "synthetic-filter-active-account-alpha.example.com")
+	assert.Contains(t, output, "synthetic-filter-inactive-account-alpha.example.com")
+	for _, forbidden := range []string{
+		"github.com",
+		"synthetic-filter-active-poison-token",
+		"synthetic-filter-active-poison-source",
+		"synthetic-filter-inactive-poison-token",
+		"synthetic-filter-inactive-poison-source",
+		"synthetic vault retrieval denied",
+	} {
+		assert.NotContains(t, output, forbidden)
+	}
 }
