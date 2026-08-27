@@ -562,6 +562,7 @@ func TestLogoutSingleUserConfigWriteFailureRestoresProviderAndConfig(t *testing.
 	accountSlot, accountSlotErr := keyring.Get(keyringServiceName(hostname), username)
 	assert.True(t, accountSlotErr == nil && accountSlot == token, "account provider credential was not restored after config write failure")
 	assertLogoutErrorSecretFree(t, err, username, token)
+	require.Same(t, errSyntheticLogoutConfigWriteDenied, err)
 	assert.ErrorIs(t, err, errSyntheticLogoutConfigWriteDenied)
 	var resolutionErr *AutomicVaultCredentialResolutionError
 	assert.False(t, errors.As(err, &resolutionErr), "a pure config write failure must not be mislabeled as a Vault failure")
@@ -653,6 +654,7 @@ func TestLogoutInactiveUserConfigWriteFailureRestoresProviderAndConfig(t *testin
 	inactiveSlot, inactiveSlotErr := keyring.Get(keyringServiceName(f.hostname), f.targetUser)
 	assert.True(t, inactiveSlotErr == nil && inactiveSlot == f.targetToken, "inactive provider credential was not restored after config write failure")
 	assertLogoutErrorSecretFree(t, err, f.activeUser, f.targetUser, f.activeToken, f.targetToken)
+	require.Same(t, errSyntheticLogoutConfigWriteDenied, err)
 	assert.ErrorIs(t, err, errSyntheticLogoutConfigWriteDenied)
 	var resolutionErr *AutomicVaultCredentialResolutionError
 	assert.False(t, errors.As(err, &resolutionErr), "a pure config write failure must not be mislabeled as a Vault failure")
@@ -724,6 +726,7 @@ func TestLogoutActiveUserConfigWriteFailureRestoresTwoUserProviderAndConfig(t *t
 	departingSlot, departingSlotErr := keyring.Get(keyringServiceName(f.hostname), f.activeUser)
 	assert.True(t, departingSlotErr == nil && departingSlot == f.activeToken, "departing provider credential was not restored after config write failure")
 	assertLogoutErrorSecretFree(t, err, f.activeUser, f.targetUser, f.activeToken, f.targetToken)
+	require.Same(t, errSyntheticLogoutConfigWriteDenied, err)
 	assert.ErrorIs(t, err, errSyntheticLogoutConfigWriteDenied)
 	var resolutionErr *AutomicVaultCredentialResolutionError
 	assert.False(t, errors.As(err, &resolutionErr), "a pure config write failure must not be mislabeled as a Vault failure")
