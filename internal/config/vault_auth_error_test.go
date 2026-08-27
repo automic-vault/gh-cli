@@ -24,6 +24,8 @@ var errSyntheticTokenForUserVaultDenied = errors.New("synthetic Vault access den
 var errSyntheticLogoutDeleteDenied = errors.New("synthetic Vault delete denied")
 var errSyntheticLogoutNextGetDenied = errors.New("synthetic Vault read denied for next account")
 var errSyntheticLogoutActiveSetDenied = errors.New("synthetic Vault active-slot write denied")
+var errSyntheticLogoutDepartingDeleteDenied = errors.New("synthetic Vault departing-account delete denied")
+var errSyntheticLogoutRollbackDenied = errors.New("synthetic Vault active-slot rollback denied")
 
 // vaultCredentialResolutionError is the runtime contract for the production
 // error type. Keeping this as an interface lets the RED suite compile before
@@ -234,6 +236,41 @@ func requireAutomicVaultCredentialError(t *testing.T, err, cause error) {
 	assert.True(t, errors.Is(err, cause), "credential operation error did not preserve its cause")
 }
 
+func requireAutomicVaultCredentialErrors(t *testing.T, err error, causes ...error) {
+	t.Helper()
+	if !assert.Error(t, err, "credential operation did not return an error") {
+		return
+	}
+	var resolutionErr *AutomicVaultCredentialResolutionError
+	if !assert.True(t, errors.As(err, &resolutionErr), "credential operation error was not classified") {
+		return
+	}
+	assert.Equal(t, "Automic Vault credential resolution failed", resolutionErr.Error())
+	for _, cause := range causes {
+		assert.True(t, errors.Is(err, cause), "credential operation error did not preserve its cause")
+	}
+}
+
+func assertLogoutProviderStateUnchanged(t *testing.T, authCfg *AuthConfig, readConfigs func(io.Writer, io.Writer), beforeHosts []byte, beforeUsers []string, beforeActive string) {
+	t.Helper()
+	assert.True(t, bytes.Equal(beforeHosts, snapshotHostsConfig(t, readConfigs)), "persisted authentication state changed during provider operation")
+	assertSyntheticStringSlice(t, beforeUsers, authCfg.UsersForHost("github.com"), "account list changed during provider operation")
+	activeUser, err := authCfg.ActiveUser("github.com")
+	assert.NoError(t, err)
+	assertSyntheticString(t, beforeActive, activeUser, "active account changed during provider operation")
+}
+
+func assertLogoutErrorSecretFree(t *testing.T, err error, forbidden ...string) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+	message := strings.ToLower(err.Error())
+	for _, value := range forbidden {
+		assert.False(t, strings.Contains(message, strings.ToLower(value)), "credential operation error contains secret or account material")
+	}
+}
+
 func TestLogoutPreservesStateWhenKeyringDeleteFails(t *testing.T) {
 	cfg, readConfigs := NewIsolatedTestConfig(t, "")
 	authCfg := cfg.Authentication().(*AuthConfig)
@@ -351,6 +388,345 @@ func TestLogoutRemovesInactiveAccountWhenKeyringDeleteNotFound(t *testing.T) {
 	currentUser, currentUserErr := authCfg.ActiveUser(hostname)
 	require.NoError(t, currentUserErr)
 	requireSyntheticString(t, activeUser, currentUser, "active account changed")
+}
+
+func TestLogoutCommitsTwoUserProviderTransactionInOrder(t *testing.T) {
+	cfg, readConfigs := NewIsolatedTestConfig(t, "")
+	authCfg := cfg.Authentication().(*AuthConfig)
+	const hostname = "github.com"
+	const nextUser = "synthetic-next-account"
+	const nextToken = "synthetic-next-token"
+	const activeUser = "synthetic-active-account"
+	const activeToken = "synthetic-active-token"
+	_, err := authCfg.Login(hostname, nextUser, nextToken, "https", true)
+	require.NoError(t, err)
+	_, err = authCfg.Login(hostname, activeUser, activeToken, "https", true)
+	require.NoError(t, err)
+
+	beforeHosts := snapshotHostsConfig(t, readConfigs)
+	beforeUsers := append([]string(nil), authCfg.UsersForHost(hostname)...)
+	beforeActive, err := authCfg.ActiveUser(hostname)
+	require.NoError(t, err)
+
+	var operations []string
+	authCfg.keyringGet = func(service, user string) (string, error) {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		switch user {
+		case "":
+			operations = append(operations, "get-active")
+		case nextUser:
+			operations = append(operations, "get-next")
+		default:
+			operations = append(operations, "get-unexpected")
+		}
+		return keyring.Get(service, user)
+	}
+	authCfg.keyringSet = func(service, user, secret string) error {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertSyntheticString(t, "", user, "active slot was not selected for replacement")
+		assertSyntheticString(t, nextToken, secret, "next credential was not selected for the active slot")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		operations = append(operations, "set")
+		return keyring.Set(service, user, secret)
+	}
+	authCfg.keyringDelete = func(service, user string) error {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertSyntheticString(t, activeUser, user, "departing account was not selected for deletion")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		operations = append(operations, "delete")
+		return keyring.Delete(service, user)
+	}
+
+	err = authCfg.Logout(hostname, activeUser)
+
+	assertSyntheticStringSlice(t, []string{"get-active", "get-next", "set", "delete"}, operations, "provider transaction order changed")
+	assert.NoError(t, err)
+	assertSyntheticStringSlice(t, []string{nextUser}, authCfg.UsersForHost(hostname), "departing account was not removed after provider commit")
+	currentUser, currentUserErr := authCfg.ActiveUser(hostname)
+	assert.NoError(t, currentUserErr)
+	assertSyntheticString(t, nextUser, currentUser, "next account was not activated after provider commit")
+
+	// Read the provider state through the real wrapper after clearing the test
+	// hooks. The assertions intentionally disclose only synthetic-state booleans.
+	authCfg.keyringGet = nil
+	authCfg.keyringSet = nil
+	authCfg.keyringDelete = nil
+	activeSlot, activeSlotErr := keyring.Get(keyringServiceName(hostname), "")
+	assert.True(t, activeSlotErr == nil && activeSlot == nextToken, "next credential was not promoted to the active slot")
+	departingSlot, departingSlotErr := keyring.Get(keyringServiceName(hostname), activeUser)
+	assert.True(t, errors.Is(departingSlotErr, keyring.ErrNotFound) && departingSlot == "", "departing credential was not removed")
+}
+
+func TestLogoutRollsBackTwoUserProviderAfterDepartingDeleteFails(t *testing.T) {
+	cfg, readConfigs := NewIsolatedTestConfig(t, "")
+	authCfg := cfg.Authentication().(*AuthConfig)
+	const hostname = "github.com"
+	const nextUser = "synthetic-next-account"
+	const nextToken = "synthetic-next-token"
+	const activeUser = "synthetic-active-account"
+	const activeToken = "synthetic-active-token"
+	_, err := authCfg.Login(hostname, nextUser, nextToken, "https", true)
+	require.NoError(t, err)
+	_, err = authCfg.Login(hostname, activeUser, activeToken, "https", true)
+	require.NoError(t, err)
+
+	beforeHosts := snapshotHostsConfig(t, readConfigs)
+	beforeUsers := append([]string(nil), authCfg.UsersForHost(hostname)...)
+	beforeActive, err := authCfg.ActiveUser(hostname)
+	require.NoError(t, err)
+	var operations []string
+	var setCalls int
+	authCfg.keyringGet = func(service, user string) (string, error) {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		switch user {
+		case "":
+			operations = append(operations, "get-active")
+		case nextUser:
+			operations = append(operations, "get-next")
+		default:
+			operations = append(operations, "get-unexpected")
+		}
+		return keyring.Get(service, user)
+	}
+	authCfg.keyringSet = func(service, user, secret string) error {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertSyntheticString(t, "", user, "active slot was not selected for provider write")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		setCalls++
+		switch setCalls {
+		case 1:
+			assertSyntheticString(t, nextToken, secret, "next credential was not selected for the active slot")
+			operations = append(operations, "set-next")
+		default:
+			assertSyntheticString(t, activeToken, secret, "old credential was not selected for rollback")
+			operations = append(operations, "rollback-set")
+		}
+		return keyring.Set(service, user, secret)
+	}
+	authCfg.keyringDelete = func(service, user string) error {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		if user == activeUser {
+			operations = append(operations, "delete-departing")
+			return errSyntheticLogoutDepartingDeleteDenied
+		}
+		operations = append(operations, "delete-unexpected")
+		return keyring.Delete(service, user)
+	}
+
+	err = authCfg.Logout(hostname, activeUser)
+
+	assertSyntheticStringSlice(t, []string{"get-active", "get-next", "set-next", "delete-departing", "rollback-set"}, operations, "provider rollback order changed")
+	assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+	authCfg.keyringGet = nil
+	authCfg.keyringSet = nil
+	authCfg.keyringDelete = nil
+	activeSlot, activeSlotErr := keyring.Get(keyringServiceName(hostname), "")
+	assert.True(t, activeSlotErr == nil && activeSlot == activeToken, "active credential was not restored after provider failure")
+	departingSlot, departingSlotErr := keyring.Get(keyringServiceName(hostname), activeUser)
+	assert.True(t, departingSlotErr == nil && departingSlot == activeToken, "departing credential state changed after failed deletion")
+	assertLogoutErrorSecretFree(t, err, nextUser, activeUser, nextToken, activeToken)
+	requireAutomicVaultCredentialError(t, err, errSyntheticLogoutDepartingDeleteDenied)
+}
+
+func TestLogoutPreservesTwoUserConfigWhenProviderRollbackFails(t *testing.T) {
+	cfg, readConfigs := NewIsolatedTestConfig(t, "")
+	authCfg := cfg.Authentication().(*AuthConfig)
+	const hostname = "github.com"
+	const nextUser = "synthetic-next-account"
+	const nextToken = "synthetic-next-token"
+	const activeUser = "synthetic-active-account"
+	const activeToken = "synthetic-active-token"
+	_, err := authCfg.Login(hostname, nextUser, nextToken, "https", true)
+	require.NoError(t, err)
+	_, err = authCfg.Login(hostname, activeUser, activeToken, "https", true)
+	require.NoError(t, err)
+
+	beforeHosts := snapshotHostsConfig(t, readConfigs)
+	beforeUsers := append([]string(nil), authCfg.UsersForHost(hostname)...)
+	beforeActive, err := authCfg.ActiveUser(hostname)
+	require.NoError(t, err)
+	var operations []string
+	var setCalls int
+	authCfg.keyringGet = func(service, user string) (string, error) {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		switch user {
+		case "":
+			operations = append(operations, "get-active")
+		case nextUser:
+			operations = append(operations, "get-next")
+		default:
+			operations = append(operations, "get-unexpected")
+		}
+		return keyring.Get(service, user)
+	}
+	authCfg.keyringSet = func(service, user, secret string) error {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertSyntheticString(t, "", user, "active slot was not selected for provider write")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		setCalls++
+		if setCalls == 1 {
+			assertSyntheticString(t, nextToken, secret, "next credential was not selected for the active slot")
+			operations = append(operations, "set-next")
+			return keyring.Set(service, user, secret)
+		}
+		assertSyntheticString(t, activeToken, secret, "old credential was not selected for rollback")
+		operations = append(operations, "rollback-set")
+		return errSyntheticLogoutRollbackDenied
+	}
+	authCfg.keyringDelete = func(service, user string) error {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		if user == activeUser {
+			operations = append(operations, "delete-departing")
+			return errSyntheticLogoutDepartingDeleteDenied
+		}
+		operations = append(operations, "delete-unexpected")
+		return keyring.Delete(service, user)
+	}
+
+	err = authCfg.Logout(hostname, activeUser)
+
+	assertSyntheticStringSlice(t, []string{"get-active", "get-next", "set-next", "delete-departing", "rollback-set"}, operations, "provider rollback-failure order changed")
+	assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+	assertLogoutErrorSecretFree(t, err, nextUser, activeUser, nextToken, activeToken)
+	requireAutomicVaultCredentialErrors(t, err, errSyntheticLogoutDepartingDeleteDenied, errSyntheticLogoutRollbackDenied)
+}
+
+func TestLogoutRestoresSingleUserProviderAfterAccountDeleteFails(t *testing.T) {
+	cfg, readConfigs := NewIsolatedTestConfig(t, "")
+	authCfg := cfg.Authentication().(*AuthConfig)
+	const hostname = "github.com"
+	const username = "synthetic-account"
+	const token = "synthetic-single-token"
+	_, err := authCfg.Login(hostname, username, token, "https", true)
+	require.NoError(t, err)
+	beforeHosts := snapshotHostsConfig(t, readConfigs)
+	beforeUsers := append([]string(nil), authCfg.UsersForHost(hostname)...)
+	beforeActive, err := authCfg.ActiveUser(hostname)
+	require.NoError(t, err)
+
+	var operations []string
+	var deleteCalls int
+	authCfg.keyringGet = func(service, user string) (string, error) {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		switch user {
+		case "":
+			operations = append(operations, "get-active")
+		case username:
+			operations = append(operations, "get-account")
+		default:
+			operations = append(operations, "get-unexpected")
+		}
+		return keyring.Get(service, user)
+	}
+	authCfg.keyringSet = func(service, user, secret string) error {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertSyntheticString(t, "", user, "active slot was not selected for rollback")
+		assertSyntheticString(t, token, secret, "original credential was not selected for rollback")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		operations = append(operations, "rollback-set")
+		return keyring.Set(service, user, secret)
+	}
+	authCfg.keyringDelete = func(service, user string) error {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		deleteCalls++
+		switch deleteCalls {
+		case 1:
+			assertSyntheticString(t, "", user, "active slot was not deleted first")
+			operations = append(operations, "delete-active")
+			return keyring.Delete(service, user)
+		case 2:
+			assertSyntheticString(t, username, user, "account credential was not deleted second")
+			operations = append(operations, "delete-account")
+			return errSyntheticLogoutDeleteDenied
+		default:
+			operations = append(operations, "delete-unexpected")
+			return errSyntheticLogoutDeleteDenied
+		}
+	}
+
+	err = authCfg.Logout(hostname, username)
+
+	assertSyntheticStringSlice(t, []string{"get-active", "get-account", "delete-active", "delete-account", "rollback-set"}, operations, "single-user provider rollback order changed")
+	assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+	authCfg.keyringGet = nil
+	authCfg.keyringSet = nil
+	authCfg.keyringDelete = nil
+	activeSlot, activeSlotErr := keyring.Get(keyringServiceName(hostname), "")
+	assert.True(t, activeSlotErr == nil && activeSlot == token, "active credential was not restored after account deletion failed")
+	accountSlot, accountSlotErr := keyring.Get(keyringServiceName(hostname), username)
+	assert.True(t, accountSlotErr == nil && accountSlot == token, "account credential changed after account deletion failed")
+	assertLogoutErrorSecretFree(t, err, username, token)
+	requireAutomicVaultCredentialError(t, err, errSyntheticLogoutDeleteDenied)
+}
+
+func TestLogoutPreservesSingleUserConfigWhenProviderRollbackFails(t *testing.T) {
+	cfg, readConfigs := NewIsolatedTestConfig(t, "")
+	authCfg := cfg.Authentication().(*AuthConfig)
+	const hostname = "github.com"
+	const username = "synthetic-account"
+	const token = "synthetic-single-token"
+	_, err := authCfg.Login(hostname, username, token, "https", true)
+	require.NoError(t, err)
+	beforeHosts := snapshotHostsConfig(t, readConfigs)
+	beforeUsers := append([]string(nil), authCfg.UsersForHost(hostname)...)
+	beforeActive, err := authCfg.ActiveUser(hostname)
+	require.NoError(t, err)
+
+	var operations []string
+	var deleteCalls int
+	authCfg.keyringGet = func(service, user string) (string, error) {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		switch user {
+		case "":
+			operations = append(operations, "get-active")
+		case username:
+			operations = append(operations, "get-account")
+		default:
+			operations = append(operations, "get-unexpected")
+		}
+		return keyring.Get(service, user)
+	}
+	authCfg.keyringSet = func(service, user, secret string) error {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertSyntheticString(t, "", user, "active slot was not selected for rollback")
+		assertSyntheticString(t, token, secret, "original credential was not selected for rollback")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		operations = append(operations, "rollback-set")
+		return errSyntheticLogoutRollbackDenied
+	}
+	authCfg.keyringDelete = func(service, user string) error {
+		assert.True(t, service == keyringServiceName(hostname), "unexpected keyring service")
+		assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+		deleteCalls++
+		switch deleteCalls {
+		case 1:
+			assertSyntheticString(t, "", user, "active slot was not deleted first")
+			operations = append(operations, "delete-active")
+			return keyring.Delete(service, user)
+		case 2:
+			assertSyntheticString(t, username, user, "account credential was not deleted second")
+			operations = append(operations, "delete-account")
+			return errSyntheticLogoutDeleteDenied
+		default:
+			operations = append(operations, "delete-unexpected")
+			return errSyntheticLogoutDeleteDenied
+		}
+	}
+
+	err = authCfg.Logout(hostname, username)
+
+	assertSyntheticStringSlice(t, []string{"get-active", "get-account", "delete-active", "delete-account", "rollback-set"}, operations, "single-user rollback-failure order changed")
+	assertLogoutProviderStateUnchanged(t, authCfg, readConfigs, beforeHosts, beforeUsers, beforeActive)
+	assertLogoutErrorSecretFree(t, err, username, token)
+	requireAutomicVaultCredentialErrors(t, err, errSyntheticLogoutDeleteDenied, errSyntheticLogoutRollbackDenied)
 }
 
 func TestActivateUserPreservesStateWhenNextAccountKeyringReadFails(t *testing.T) {
