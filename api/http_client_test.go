@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,26 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewHTTPClientStopsWhenTokenResolutionFails(t *testing.T) {
+	resolutionErr := errors.New("token resolution failed")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests++
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewHTTPClient(HTTPClientOptions{
+		TokenResolver: func(string) (string, error) {
+			return "", resolutionErr
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = client.Get(server.URL)
+	require.ErrorIs(t, err, resolutionErr)
+	require.Zero(t, requests)
+}
 
 func TestNewHTTPClient(t *testing.T) {
 	type args struct {
