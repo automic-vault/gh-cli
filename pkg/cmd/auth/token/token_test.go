@@ -106,7 +106,7 @@ func TestTokenRun(t *testing.T) {
 			name: "token",
 			opts: TokenOptions{},
 			cfgStubs: func(t *testing.T, cfg gh.Config) {
-				login(t, cfg, "github.com", "test-user", "gho_ABCDEFG", "https", false)
+				login(t, cfg, "github.com", "test-user", "gho_ABCDEFG", "https", true)
 			},
 			wantStdout: "gho_ABCDEFG\n",
 		},
@@ -116,8 +116,8 @@ func TestTokenRun(t *testing.T) {
 				Hostname: "github.mycompany.com",
 			},
 			cfgStubs: func(t *testing.T, cfg gh.Config) {
-				login(t, cfg, "github.com", "test-user", "gho_ABCDEFG", "https", false)
-				login(t, cfg, "github.mycompany.com", "test-user", "gho_1234567", "https", false)
+				login(t, cfg, "github.com", "test-user", "gho_ABCDEFG", "https", true)
+				login(t, cfg, "github.mycompany.com", "test-user", "gho_1234567", "https", true)
 			},
 			wantStdout: "gho_1234567\n",
 		},
@@ -140,8 +140,8 @@ func TestTokenRun(t *testing.T) {
 			name: "uses default host when one is not provided",
 			opts: TokenOptions{},
 			cfgStubs: func(t *testing.T, cfg gh.Config) {
-				login(t, cfg, "github.com", "test-user", "gho_ABCDEFG", "https", false)
-				login(t, cfg, "github.mycompany.com", "test-user", "gho_1234567", "https", false)
+				login(t, cfg, "github.com", "test-user", "gho_ABCDEFG", "https", true)
+				login(t, cfg, "github.mycompany.com", "test-user", "gho_1234567", "https", true)
 			},
 			env:        map[string]string{"GH_HOST": "github.mycompany.com"},
 			wantStdout: "gho_1234567\n",
@@ -153,8 +153,8 @@ func TestTokenRun(t *testing.T) {
 				Username: "test-user",
 			},
 			cfgStubs: func(t *testing.T, cfg gh.Config) {
-				login(t, cfg, "github.com", "test-user", "gho_ABCDEFG", "https", false)
-				login(t, cfg, "github.com", "test-user-2", "gho_1234567", "https", false)
+				login(t, cfg, "github.com", "test-user", "gho_ABCDEFG", "https", true)
+				login(t, cfg, "github.com", "test-user-2", "gho_1234567", "https", true)
 			},
 			wantStdout: "gho_ABCDEFG\n",
 		},

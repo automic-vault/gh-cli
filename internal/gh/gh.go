@@ -110,6 +110,9 @@ type AuthConfig interface {
 	// general configuration, and finally encrypted storage.
 	ActiveToken(hostname string) (token string, source string)
 
+	// ActiveTokenWithError retrieves the active token without discarding credential-provider errors.
+	ActiveTokenWithError(hostname string) (token string, source string, err error)
+
 	// HasEnvToken returns true when a token has been specified in an environment variable, else returns false.
 	HasEnvToken() bool
 

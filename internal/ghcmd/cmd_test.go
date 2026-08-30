@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"testing"
 
 	"github.com/cli/cli/v2/api"
@@ -133,6 +134,14 @@ func Test_newIOStreams_pager(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GH_PAGER", "")
+			t.Setenv("PAGER", "")
+			if err := os.Unsetenv("GH_PAGER"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Unsetenv("PAGER"); err != nil {
+				t.Fatal(err)
+			}
 			if tt.env != nil {
 				for k, v := range tt.env {
 					t.Setenv(k, v)
