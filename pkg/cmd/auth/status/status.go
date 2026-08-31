@@ -294,7 +294,10 @@ func statusRun(opts *StatusOptions) error {
 
 		var activeUser string
 		gitProtocol := cfg.GitProtocol(hostname).Value
-		activeCred, activeRefreshStatus := resolveCredential(authCfg, hostname, "", opts.NoRefresh)
+		activeCred, activeRefreshStatus, err := resolveCredential(authCfg, hostname, "", opts.NoRefresh)
+		if err != nil && activeCred.Source == "" {
+			return err
+		}
 		if authTokenWriteable(activeCred.Source) {
 			activeUser, _ = authCfg.ActiveUser(hostname)
 		}
@@ -321,7 +324,10 @@ func statusRun(opts *StatusOptions) error {
 			if username == activeUser {
 				continue
 			}
-			cred, refreshStatus := resolveCredential(authCfg, hostname, username, opts.NoRefresh)
+			cred, refreshStatus, err := resolveCredential(authCfg, hostname, username, opts.NoRefresh)
+			if err != nil && cred.Source == "" {
+				return err
+			}
 			entry := buildEntry(httpClient, buildEntryOptions{
 				active:        false,
 				gitProtocol:   gitProtocol,
@@ -502,18 +508,17 @@ func authTokenWriteable(src string) bool {
 // active account), refreshing an expiring token unless noRefresh is set. Refresh is best effort: a failed
 // refresh yields the last stored credential, which the caller still validates via the scope check. The returned status
 // reports whether a refresh happened.
-func resolveCredential(authCfg gh.AuthConfig, hostname, username string, noRefresh bool) (gh.Credential, gh.RefreshStatus) {
+func resolveCredential(authCfg gh.AuthConfig, hostname, username string, noRefresh bool) (gh.Credential, gh.RefreshStatus, error) {
 	if noRefresh {
 		if username == "" {
-			return authCfg.ActiveToken(hostname), gh.RefreshStatusInapplicable
+			credential, err := authCfg.ActiveTokenWithError(hostname)
+			return credential, gh.RefreshStatusInapplicable, err
 		}
-		credential, _ := authCfg.TokenForUser(hostname, username)
-		return credential, gh.RefreshStatusInapplicable
+		credential, err := authCfg.TokenForUser(hostname, username)
+		return credential, gh.RefreshStatusInapplicable, err
 	}
 	if username == "" {
-		credential, status, _ := authCfg.ActiveTokenWithRefresh(hostname)
-		return credential, status
+		return authCfg.ActiveTokenWithRefresh(hostname)
 	}
-	credential, status, _ := authCfg.TokenForUserWithRefresh(hostname, username)
-	return credential, status
+	return authCfg.TokenForUserWithRefresh(hostname, username)
 }

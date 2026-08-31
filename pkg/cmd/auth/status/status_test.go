@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/cli/cli/v2/internal/config"
 	"github.com/cli/cli/v2/internal/gh"
 	ghmock "github.com/cli/cli/v2/internal/gh/mock"
+	"github.com/cli/cli/v2/internal/keyring"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/httpmock"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -945,6 +947,54 @@ func Test_statusRun(t *testing.T) {
 
 			require.Equal(t, tt.wantErrOut, errorOutput)
 			require.Equal(t, tt.wantOut, output)
+		})
+	}
+}
+
+func TestStatusRunStopsWhenCredentialProviderFails(t *testing.T) {
+	providerErr := errors.New("credential provider unavailable")
+	tests := []struct {
+		name         string
+		envToken     bool
+		wantRequests int
+	}{
+		{name: "active account", wantRequests: 0},
+		{name: "inactive account", envToken: true, wantRequests: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ios, _, _, _ := iostreams.Test()
+			cfg, _ := config.NewIsolatedTestConfig(t, "")
+			login(t, cfg, "github.com", "monalisa", "gho_abc123", "https")
+			if tt.envToken {
+				t.Setenv("GH_TOKEN", "gho_envtoken")
+			}
+			keyring.MockInitWithError(providerErr)
+
+			reg := &httpmock.Registry{}
+			if tt.envToken {
+				reg.Register(
+					httpmock.GraphQL(`query UserCurrent\b`),
+					httpmock.StringResponse(`{"data":{"viewer":{"login":"monalisa-env"}}}`),
+				)
+				reg.Register(httpmock.REST("GET", ""), httpmock.ScopesResponder("repo,read:org"))
+			}
+			defer reg.Verify(t)
+			opts := &StatusOptions{
+				IO: ios,
+				Config: func() (gh.Config, error) {
+					return cfg, nil
+				},
+				HttpClient: func() (*http.Client, error) {
+					return &http.Client{Transport: reg}, nil
+				},
+			}
+
+			err := statusRun(opts)
+
+			require.ErrorIs(t, err, providerErr)
+			require.Len(t, reg.Requests, tt.wantRequests)
 		})
 	}
 }

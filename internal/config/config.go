@@ -299,9 +299,8 @@ func (c *AuthConfig) ActiveToken(hostname string) gh.Credential {
 }
 
 // ActiveTokenWithError retrieves the active token without discarding credential-provider errors.
-func (c *AuthConfig) ActiveTokenWithError(hostname string) (string, string, error) {
-	credential, err := c.activeCredentialWithError(hostname)
-	return credential.Token, credential.Source, err
+func (c *AuthConfig) ActiveTokenWithError(hostname string) (gh.Credential, error) {
+	return c.activeCredentialWithError(hostname)
 }
 
 func (c *AuthConfig) activeCredentialWithError(hostname string) (gh.Credential, error) {
@@ -707,7 +706,7 @@ func (c *AuthConfig) TokenForUser(hostname, user string) (gh.Credential, error) 
 	if token, err := keyring.Get(keyringServiceName(hostname), user); err == nil {
 		return gh.Credential{Source: gh.TokenSourceKeyring, Token: token}, nil
 	} else if !errors.Is(err, keyring.ErrNotFound) {
-		return gh.Credential{}, err
+		return gh.Credential{}, fmt.Errorf("failed to resolve authentication token: %w", err)
 	}
 
 	if credential, _, err := c.refreshableForUser(hostname, user); err == nil {
