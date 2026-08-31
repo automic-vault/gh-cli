@@ -515,8 +515,12 @@ func (c *AuthConfig) UsersForHost(hostname string) []string {
 }
 
 func (c *AuthConfig) TokenForUser(hostname, user string) (string, string, error) {
-	if token, err := keyring.Get(keyringServiceName(hostname), user); err == nil {
+	token, err := keyring.Get(keyringServiceName(hostname), user)
+	if err == nil {
 		return token, "keyring", nil
+	}
+	if !errors.Is(err, keyring.ErrNotFound) {
+		return "", "", fmt.Errorf("failed to resolve authentication token: %w", err)
 	}
 
 	return "", "default", fmt.Errorf("no token found for '%s'", user)
