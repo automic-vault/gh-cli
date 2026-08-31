@@ -67,11 +67,11 @@ func TestActiveTokenWithErrorDistinguishesAbsenceFromProviderFailure(t *testing.
 	t.Run("absence", func(t *testing.T) {
 		authCfg := newTestAuthConfig(t)
 
-		token, source, err := authCfg.ActiveTokenWithError("github.com")
+		credential, err := authCfg.ActiveTokenWithError("github.com")
 
 		require.NoError(t, err)
-		require.Empty(t, token)
-		require.Empty(t, source)
+		require.Empty(t, credential.Token)
+		require.Empty(t, credential.Source)
 	})
 
 	t.Run("provider failure", func(t *testing.T) {
@@ -79,11 +79,11 @@ func TestActiveTokenWithErrorDistinguishesAbsenceFromProviderFailure(t *testing.
 		providerErr := errors.New("provider unavailable")
 		keyring.MockInitWithError(providerErr)
 
-		token, source, err := authCfg.ActiveTokenWithError("github.com")
+		credential, err := authCfg.ActiveTokenWithError("github.com")
 
 		require.ErrorIs(t, err, providerErr)
-		require.Empty(t, token)
-		require.Empty(t, source)
+		require.Empty(t, credential.Token)
+		require.Empty(t, credential.Source)
 	})
 }
 
