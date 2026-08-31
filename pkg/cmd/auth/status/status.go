@@ -238,7 +238,10 @@ func statusRun(opts *StatusOptions) error {
 
 		var activeUser string
 		gitProtocol := cfg.GitProtocol(hostname).Value
-		activeUserToken, activeUserTokenSource := authCfg.ActiveToken(hostname)
+		activeUserToken, activeUserTokenSource, err := authCfg.ActiveTokenWithError(hostname)
+		if err != nil {
+			return err
+		}
 		if authTokenWriteable(activeUserTokenSource) {
 			activeUser, _ = authCfg.ActiveUser(hostname)
 		}
@@ -265,7 +268,10 @@ func statusRun(opts *StatusOptions) error {
 			if username == activeUser {
 				continue
 			}
-			token, tokenSource, _ := authCfg.TokenForUser(hostname, username)
+			token, tokenSource, err := authCfg.TokenForUser(hostname, username)
+			if err != nil {
+				return err
+			}
 			entry := buildEntry(httpClient, buildEntryOptions{
 				active:      false,
 				gitProtocol: gitProtocol,
