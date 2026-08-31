@@ -35,3 +35,12 @@ func TestApprovalDecisionNotice(t *testing.T) {
 	require.Equal(t, "automic vault: denied\n", approvalDecisionNotice("denied"))
 	require.Empty(t, approvalDecisionNotice("other-decision"))
 }
+
+func TestApprovalServiceUnavailableMessage(t *testing.T) {
+	require.Equal(t,
+		"Automic Vault approval service is blocked by this process's sandbox; retry with elevated permissions",
+		approvalServiceUnavailableMessage(true))
+	require.Equal(t,
+		"Automic Vault approval service is not running; open the menu bar app",
+		approvalServiceUnavailableMessage(false))
+}
