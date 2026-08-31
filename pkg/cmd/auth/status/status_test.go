@@ -785,13 +785,14 @@ func TestStatusRunStopsWhenCredentialProviderFails(t *testing.T) {
 			keyring.MockInitWithError(providerErr)
 
 			reg := &httpmock.Registry{}
-			reg.Register(
-				httpmock.GraphQL(`query UserCurrent\b`),
-				httpmock.StringResponse(`{"data":{"viewer":{"login":"monalisa-env"}}}`),
-			)
-			for range 2 {
+			if tt.envToken {
+				reg.Register(
+					httpmock.GraphQL(`query UserCurrent\b`),
+					httpmock.StringResponse(`{"data":{"viewer":{"login":"monalisa-env"}}}`),
+				)
 				reg.Register(httpmock.REST("GET", ""), httpmock.ScopesResponder("repo,read:org"))
 			}
+			defer reg.Verify(t)
 			opts := &StatusOptions{
 				IO: ios,
 				Config: func() (gh.Config, error) {

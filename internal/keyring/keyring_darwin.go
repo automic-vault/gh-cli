@@ -26,6 +26,10 @@ static const char *av_xpc_error_description(xpc_object_t object) {
 	return xpc_dictionary_get_string(object, XPC_ERROR_KEY_DESCRIPTION);
 }
 
+static int av_xpc_connection_invalid(xpc_object_t object) {
+	return xpc_equal(object, (xpc_object_t)XPC_ERROR_CONNECTION_INVALID);
+}
+
 */
 import "C"
 
@@ -228,15 +232,16 @@ func send(message C.xpc_object_t) (C.xpc_object_t, error) {
 		return nil, errors.New("Automic Vault approval did not reply")
 	}
 	if C.xpc_get_type(reply) == C.av_xpc_type_error() {
+		if C.av_xpc_connection_invalid(reply) != 0 {
+			C.xpc_release(reply)
+			return nil, errors.New(approvalServiceUnavailableMessage(C.av_sandbox_denies_mach_lookup(service) != 0))
+		}
 		desc := C.av_xpc_error_description(reply)
 		err := "Automic Vault XPC connection failed"
 		if desc != nil {
 			err = C.GoString(desc)
 		}
 		C.xpc_release(reply)
-		if err == "Connection invalid" {
-			return nil, errors.New(approvalServiceUnavailableMessage(C.av_sandbox_denies_mach_lookup(service) != 0))
-		}
 		return nil, errors.New(err)
 	}
 	decisionKey := C.CString("human_approval_decision")

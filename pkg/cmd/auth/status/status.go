@@ -269,7 +269,7 @@ func statusRun(opts *StatusOptions) error {
 				continue
 			}
 			token, tokenSource, err := authCfg.TokenForUser(hostname, username)
-			if err != nil {
+			if err != nil && tokenSource == "" {
 				return err
 			}
 			entry := buildEntry(httpClient, buildEntryOptions{
