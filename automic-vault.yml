@@ -13,14 +13,12 @@ build: |
 
 justification:
   title:
-    Trivially Accessible Secrets
+    Unprotected Credential Access
   detail: |
-    `gh` stores its secrets in the Keychain but they can be trivially
-    obtained:
+    Upstream GitHub CLI stores credentials in the macOS Keychain where
+    same-user processes can retrieve them with `/usr/bin/security`, and
+    exposes `gh auth token` as Secret Disclosure.
 
-    1. `gh auth token`
-    2. `security find-generic-password -s 'gh:github.com' -w`
-
-    Our isotope routes `gh` token reads through the Automic Vault XPC helper,
-    which can show token request metadata to the human and release credentials
-    only when the request is approved.
+    This Isotope routes token reads through Automic Vault's authenticated XPC
+    service, which applies policy or requests Approval for each Secret Use and
+    records its Authorization Decision in Authorization History.
