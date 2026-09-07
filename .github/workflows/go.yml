@@ -31,6 +31,10 @@ jobs:
       - name: Run unit and integration tests
         run: go test -race -tags=integration ./...
 
+      - name: Verify Automic Vault XPC request context
+        if: runner.os == 'macOS'
+        run: python3 script/test-vault-keyring.py
+
       - name: Build
         run: go build -v ./cmd/gh
 
