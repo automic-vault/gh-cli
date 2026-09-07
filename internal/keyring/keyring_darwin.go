@@ -167,10 +167,6 @@ func deleteSecret(service, user string) error {
 }
 
 func addRequestMetadata(message C.xpc_object_t, service, user, key string) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = "."
-	}
 	target, err := os.Executable()
 	if err != nil {
 		target = "gh"
@@ -184,7 +180,6 @@ func addRequestMetadata(message C.xpc_object_t, service, user, key string) error
 
 	for k, v := range map[string]string{
 		"target": target,
-		"cwd":    cwd,
 		"tool":   "gh",
 		"title":  "GitHub token requested",
 		"detail": tokenRequestDetail(service, user),
@@ -209,6 +204,14 @@ func addRequestMetadata(message C.xpc_object_t, service, user, key string) error
 }
 
 func send(message C.xpc_object_t) (C.xpc_object_t, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine Automic Vault request working directory: %w", err)
+	}
+	if err := setString(message, "cwd", cwd); err != nil {
+		return nil, err
+	}
+
 	service := C.CString(approvalService)
 	defer C.free(unsafe.Pointer(service))
 	connection := C.xpc_connection_create_mach_service(service, nil, 0)
