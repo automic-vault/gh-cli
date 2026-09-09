@@ -126,6 +126,11 @@ func get(service, user string) (string, error) {
 	}
 	defer C.xpc_release(reply)
 	if err := replyError(reply, "key request denied"); err != nil {
+		// Some upstream token lookups discard errors. Keep Vault failures visible
+		// without changing missing-token fallback or writing into credential stdout.
+		if !errors.Is(err, ErrNotFound) {
+			_, _ = fmt.Fprintf(os.Stderr, "automic vault: %s\n", err)
+		}
 		return "", err
 	}
 
@@ -255,14 +260,7 @@ func send(message C.xpc_object_t) (C.xpc_object_t, error) {
 	return reply, nil
 }
 
-func replyError(reply C.xpc_object_t, fallback string) (result error) {
-	// Some upstream token lookups discard errors. Keep Vault failures visible
-	// without changing missing-token fallback or writing into credential stdout.
-	defer func() {
-		if result != nil && !errors.Is(result, ErrNotFound) {
-			_, _ = fmt.Fprintf(os.Stderr, "automic vault: %s\n", result)
-		}
-	}()
+func replyError(reply C.xpc_object_t, fallback string) error {
 	okKey := C.CString("ok")
 	defer C.free(unsafe.Pointer(okKey))
 	if C.xpc_dictionary_get_bool(reply, okKey) {

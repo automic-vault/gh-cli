@@ -53,7 +53,7 @@ func TestVaultRequestErrorNotice(t *testing.T) {
     } {
         for _, response := range []string{
             "Stored Secrets are unavailable from Keychain. Unlock the Mac and retry. (-25308)",
-            "Secrets are unavailable from Keychain. Unlock the Mac and retry. To use Secrets while locked, enable Available While Locked for the needed Secrets in the Automic Vault app. Login and credential changes may still require unlocking. (-25308)",
+            "Secret GH_TOKEN_GITHUB_COM is unavailable from Keychain. Unlock the Mac and retry. You can allow Automic Vault to access the needed Secrets while locked: enable Available While Locked for them in the Automic Vault app. Authorization is still required. Login and credential changes may still require unlocking. (-25308)",
             "failed to load selected value for GH_TOKEN_GITHUB_COM: -25308",
             "not found",
             "failed to load secret GH_TOKEN_GITHUB_COM: -25300",
@@ -84,7 +84,11 @@ func TestVaultRequestErrorNotice(t *testing.T) {
                     expected := response
                     if expected == "" { expected = operation.fallback }
                     require.EqualError(t, err, expected)
-                    require.Equal(t, "automic vault: "+expected+"\n", string(output))
+                    if operation.name == "read" {
+                        require.Equal(t, "automic vault: "+expected+"\n", string(output))
+                    } else {
+                        require.Empty(t, output) // Upstream can intentionally ignore cleanup errors.
+                    }
                 }
                 output, readErr = os.ReadFile(stdout.Name())
                 require.NoError(t, readErr)
