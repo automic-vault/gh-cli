@@ -29,13 +29,70 @@ code = code[:start].replace("os.Getwd()", "vaultTestGetwd()") + r'''
     reply := C.xpc_dictionary_create_empty()
     okKey := C.CString("ok")
     defer C.free(unsafe.Pointer(okKey))
-    C.xpc_dictionary_set_bool(reply, okKey, true)
+    C.xpc_dictionary_set_bool(reply, okKey, vaultTestReplyError == nil)
+    if vaultTestReplyError != nil && *vaultTestReplyError != "" {
+        if err := setString(reply, "error", *vaultTestReplyError); err != nil { panic(err) }
+    }
     return reply, nil
 }
 ''' + code[end:]
 
 extra_tests = r'''
 var vaultTestGetwd = os.Getwd
+var vaultTestReplyError *string
+
+func TestVaultRequestErrorNotice(t *testing.T) {
+    for _, operation := range []struct {
+        name string
+        run func() error
+        fallback string
+    }{
+        {"read", func() error { _, err := get("gh:github.com", "mona"); return err }, "key request denied"},
+        {"save", func() error { return set("gh:github.com", "mona", "fixture-secret-must-not-be-printed") }, "secret save failed"},
+        {"delete", func() error { return deleteSecret("gh:github.com", "mona") }, "secret delete failed"},
+    } {
+        for _, response := range []string{
+            "Stored Secrets are unavailable from Keychain. Unlock the Mac and retry. (-25308)",
+            "Secrets are unavailable from Keychain. Unlock the Mac and retry. To use Secrets while locked, enable Available While Locked for the needed Secrets in the Automic Vault app. Login and credential changes may still require unlocking. (-25308)",
+            "failed to load selected value for GH_TOKEN_GITHUB_COM: -25308",
+            "not found",
+            "failed to load secret GH_TOKEN_GITHUB_COM: -25300",
+            "",
+        } {
+            t.Run(operation.name+"/"+response, func(t *testing.T) {
+                originalStderr, originalStdout := os.Stderr, os.Stdout
+                t.Cleanup(func() {
+                    os.Stderr, os.Stdout = originalStderr, originalStdout
+                    vaultTestReplyError = nil
+                })
+                stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+                require.NoError(t, err)
+                defer stderr.Close()
+                stdout, err := os.CreateTemp(t.TempDir(), "stdout")
+                require.NoError(t, err)
+                defer stdout.Close()
+                os.Stderr, os.Stdout = stderr, stdout
+                vaultTestReplyError = &response
+                err = operation.run()
+                require.Error(t, err)
+                output, readErr := os.ReadFile(stderr.Name())
+                require.NoError(t, readErr)
+                if response == "not found" || strings.Contains(response, "-25300") {
+                    require.ErrorIs(t, err, ErrNotFound)
+                    require.Empty(t, output)
+                } else {
+                    expected := response
+                    if expected == "" { expected = operation.fallback }
+                    require.EqualError(t, err, expected)
+                    require.Equal(t, "automic vault: "+expected+"\n", string(output))
+                }
+                output, readErr = os.ReadFile(stdout.Name())
+                require.NoError(t, readErr)
+                require.Empty(t, output)
+            })
+        }
+    }
+}
 
 func TestVaultRequestWorkingDirectory(t *testing.T) {
     t.Chdir(t.TempDir())
@@ -66,7 +123,7 @@ func TestVaultRequestMissingWorkingDirectory(t *testing.T) {
 with tempfile.TemporaryDirectory(prefix="gh-vault-test-") as directory:
     tmp = Path(directory)
     (tmp / "keyring.go").write_text(code)
-    (tmp / "keyring_test.go").write_text(tests.read_text().replace('"testing"', '"testing"\n"os"') + extra_tests)
+    (tmp / "keyring_test.go").write_text(tests.read_text().replace('"testing"', '"testing"\n"os"\n"strings"') + extra_tests)
     (tmp / "overlay.json").write_text(json.dumps({"Replace": {
         str(source): str(tmp / "keyring.go"),
         str(tests): str(tmp / "keyring_test.go"),

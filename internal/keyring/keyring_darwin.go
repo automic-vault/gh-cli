@@ -255,7 +255,14 @@ func send(message C.xpc_object_t) (C.xpc_object_t, error) {
 	return reply, nil
 }
 
-func replyError(reply C.xpc_object_t, fallback string) error {
+func replyError(reply C.xpc_object_t, fallback string) (result error) {
+	// Some upstream token lookups discard errors. Keep Vault failures visible
+	// without changing missing-token fallback or writing into credential stdout.
+	defer func() {
+		if result != nil && !errors.Is(result, ErrNotFound) {
+			_, _ = fmt.Fprintf(os.Stderr, "automic vault: %s\n", result)
+		}
+	}()
 	okKey := C.CString("ok")
 	defer C.free(unsafe.Pointer(okKey))
 	if C.xpc_dictionary_get_bool(reply, okKey) {
