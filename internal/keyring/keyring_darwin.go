@@ -126,6 +126,11 @@ func get(service, user string) (string, error) {
 	}
 	defer C.xpc_release(reply)
 	if err := replyError(reply, "key request denied"); err != nil {
+		// Some upstream token lookups discard errors. Keep Vault failures visible
+		// without changing missing-token fallback or writing into credential stdout.
+		if !errors.Is(err, ErrNotFound) {
+			_, _ = fmt.Fprintf(os.Stderr, "automic vault: %s\n", err)
+		}
 		return "", err
 	}
 
