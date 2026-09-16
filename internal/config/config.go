@@ -279,8 +279,7 @@ func (c *AuthConfig) ActiveTokenWithError(hostname string) (string, string, erro
 			return "", "", fmt.Errorf("failed to resolve authentication token: %w", err)
 		}
 	} else if err != nil {
-		var keyNotFoundError *ghConfig.KeyNotFoundError
-		if !errors.As(err, &keyNotFoundError) {
+		if _, ok := errors.AsType[*ghConfig.KeyNotFoundError](err); !ok {
 			return "", "", err
 		}
 	}
