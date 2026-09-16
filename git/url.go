@@ -27,7 +27,8 @@ func isPossibleProtocol(u string) bool {
 
 // ParseURL normalizes git remote urls
 func ParseURL(rawURL string) (*url.URL, error) {
-	if !isPossibleProtocol(rawURL) &&
+	// Keep Vault remote-helper URLs intact for Git transport.
+	if !strings.HasPrefix(rawURL, "av::") && !isPossibleProtocol(rawURL) &&
 		strings.ContainsRune(rawURL, ':') &&
 		// not a Windows path
 		!strings.ContainsRune(rawURL, '\\') {

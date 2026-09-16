@@ -7,6 +7,7 @@ import (
 	"github.com/cli/cli/v2/git"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_Remotes_FindByName(t *testing.T) {
@@ -136,4 +137,56 @@ func Test_FilterByHosts(t *testing.T) {
 	assert.Equal(t, 2, len(f))
 	assert.Equal(t, r1, f[0])
 	assert.Equal(t, r2, f[1])
+}
+
+func TestTranslateRemotesVault(t *testing.T) {
+	for _, tt := range []struct {
+		raw   string
+		valid bool
+	}{
+		{"av::https://github.com/monalisa/octo-cat.git", true},
+		{"https://github.com/monalisa/octo-cat.git", true},
+		{"git@github.com:monalisa/octo-cat.git", true},
+		{"av::http://github.com/monalisa/octo-cat.git", false},
+		{"av::ssh://git@github.com/monalisa/octo-cat.git", false},
+		{"av::https://example.com/monalisa/octo-cat.git", false},
+		{"av::https://github.com.evil.test/monalisa/octo-cat.git", false},
+		{"av::https://github.com@evil.test/monalisa/octo-cat.git", false},
+		{"av::https://user@github.com/monalisa/octo-cat.git", false},
+		{"av::https://github.com:443/monalisa/octo-cat.git", false},
+		{"av::https://github.com/monalisa/octo-cat", false},
+		{"av::https://github.com/monalisa/octo-cat.git/extra", false},
+		{"av::https://github.com/monalisa/octo-cat.git?query=1", false},
+		{"av::https://github.com/monalisa/octo-cat.git#fragment", false},
+		{"av::https://github.com/monalisa/octo%2dcat.git", false},
+		{"av::https://github.com//octo-cat.git", false},
+		{"av::https://github.com/../octo-cat.git", false},
+		{"av::https://github.com/monalisa/...git", false},
+		{"av::av::https://github.com/monalisa/octo-cat.git", false},
+		{"av:https://github.com/monalisa/octo-cat.git", false},
+	} {
+		t.Run(tt.raw, func(t *testing.T) {
+			u, err := git.ParseURL(tt.raw)
+			require.NoError(t, err)
+			original := u.String()
+			for _, remote := range []*git.Remote{
+				{Name: "origin", FetchURL: u},
+				{Name: "origin", PushURL: u},
+			} {
+				result := TranslateRemotes(git.RemoteSet{remote}, identityTranslator{})
+				if !tt.valid {
+					require.Empty(t, result)
+					continue
+				}
+				require.Len(t, result, 1)
+				assert.Equal(t, "github.com", result[0].RepoHost())
+				assert.Equal(t, "monalisa/octo-cat", ghrepo.FullName(result[0]))
+				assert.Same(t, remote, result[0].Remote)
+				assert.Equal(t, original, u.String())
+				if u.Scheme == "av" {
+					assert.Equal(t, tt.raw, u.String())
+				}
+			}
+		})
+	}
 }
