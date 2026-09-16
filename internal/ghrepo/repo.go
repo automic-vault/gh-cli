@@ -3,6 +3,7 @@ package ghrepo
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/cli/cli/v2/internal/ghinstance"
@@ -57,8 +58,24 @@ func FromFullNameWithHost(nwo, fallbackHost string) (Interface, error) {
 	return NewWithHost(repo.Owner, repo.Name, repo.Host), nil
 }
 
+// Match only the GitHub HTTPS surface supported by Vault's protected transport.
+var vaultRemoteURL = regexp.MustCompile(`^av::https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)\.git$`)
+
 // FromURL extracts the GitHub repository information from a git remote URL
 func FromURL(u *url.URL) (Interface, error) {
+	if u.Scheme == "av" {
+		parts := vaultRemoteURL.FindStringSubmatch(u.String())
+		if parts == nil || parts[1] == "." || parts[1] == ".." || parts[2] == "." || parts[2] == ".." {
+			return nil, fmt.Errorf("unsupported Automic Vault remote URL")
+		}
+		// Normalize only repository identity; retain the helper URL for Git operations.
+		inner, err := url.Parse(strings.TrimPrefix(u.String(), "av::"))
+		if err != nil {
+			return nil, err
+		}
+		u = inner
+	}
+
 	if u.Hostname() == "" {
 		return nil, fmt.Errorf("no hostname detected")
 	}
