@@ -14,17 +14,20 @@ tests = root / "internal/keyring/keyring_darwin_test.go"
 code = source.read_text()
 start = code.index('\tservice := C.CString(approvalService)', code.index('func send('))
 end = code.index('\nfunc replyError(', start)
-code = code[:start].replace("os.Getwd()", "vaultTestGetwd()") + r'''
+code = code[:start].replace('\t"syscall"\n', '').replace("syscall.Getwd()", "vaultTestGetwd()") + r'''
     cwdKey := C.CString("cwd")
     defer C.free(unsafe.Pointer(cwdKey))
     requestCWD := C.xpc_dictionary_get_string(message, cwdKey)
     if requestCWD == nil {
         return nil, errors.New("secret mutation is missing its working directory")
     }
-    expected, wdErr := os.Getwd()
-    if wdErr != nil { return nil, errors.New("transport reached without a working directory") }
-    if C.GoString(requestCWD) != expected {
-        return nil, errors.New("request working directory differs from process working directory")
+    dot := C.CString(".")
+    defer C.free(unsafe.Pointer(dot))
+    expected := C.realpath(dot, nil)
+    if expected == nil { return nil, errors.New("transport reached without a working directory") }
+    defer C.free(unsafe.Pointer(expected))
+    if C.GoString(requestCWD) != C.GoString(expected) {
+        return nil, fmt.Errorf("request working directory %q is not canonical: %s", C.GoString(requestCWD), C.GoString(expected))
     }
     reply := C.xpc_dictionary_create_empty()
     okKey := C.CString("ok")
@@ -38,7 +41,7 @@ code = code[:start].replace("os.Getwd()", "vaultTestGetwd()") + r'''
 ''' + code[end:]
 
 extra_tests = r'''
-var vaultTestGetwd = os.Getwd
+var vaultTestGetwd = syscall.Getwd
 var vaultTestReplyError *string
 
 func TestVaultRequestErrorNotice(t *testing.T) {
@@ -99,17 +102,39 @@ func TestVaultRequestErrorNotice(t *testing.T) {
 }
 
 func TestVaultRequestWorkingDirectory(t *testing.T) {
-    t.Chdir(t.TempDir())
-    for _, user := range []string{"", "mona"} {
-        t.Run("save/"+user, func(t *testing.T) {
-            require.NoError(t, set("gh:github.com", user, "test-token"))
-        })
-        t.Run("delete/"+user, func(t *testing.T) {
-            require.NoError(t, deleteSecret("gh:github.com", user))
-        })
-        t.Run("read/"+user, func(t *testing.T) {
-            _, err := get("gh:github.com", user)
-            require.ErrorIs(t, err, ErrNotFound) // Transport validated cwd; reply has no token.
+    physical := filepath.Join(t.TempDir(), "Project")
+    require.NoError(t, os.Mkdir(physical, 0700))
+    physical, err := filepath.EvalSymlinks(physical)
+    require.NoError(t, err)
+    alias := filepath.Join(t.TempDir(), "alias")
+    require.NoError(t, os.Symlink(physical, alias))
+    for _, directory := range []struct { name, cwd, pwd string }{
+        {"physical", physical, physical},
+        {"symlink", alias, alias},
+        {"tmp", "/tmp", "/tmp"},
+        {"case", filepath.Join(filepath.Dir(physical), "pROJECT"), filepath.Join(filepath.Dir(physical), "pROJECT")},
+        {"stale-pwd", physical, t.TempDir()},
+    } {
+        t.Run(directory.name, func(t *testing.T) {
+            if directory.name == "case" {
+                if _, err := os.Stat(directory.cwd); os.IsNotExist(err) {
+                    t.Skip("case-sensitive filesystem")
+                }
+            }
+            t.Chdir(directory.cwd)
+            t.Setenv("PWD", directory.pwd)
+            for _, user := range []string{"", "mona"} {
+                t.Run("save/"+user, func(t *testing.T) {
+                    require.NoError(t, set("gh:github.com", user, "test-token"))
+                })
+                t.Run("delete/"+user, func(t *testing.T) {
+                    require.NoError(t, deleteSecret("gh:github.com", user))
+                })
+                t.Run("read/"+user, func(t *testing.T) {
+                    _, err := get("gh:github.com", user)
+                    require.ErrorIs(t, err, ErrNotFound) // Transport validated cwd; reply has no token.
+                })
+            }
         })
     }
 }
@@ -127,7 +152,7 @@ func TestVaultRequestMissingWorkingDirectory(t *testing.T) {
 with tempfile.TemporaryDirectory(prefix="gh-vault-test-") as directory:
     tmp = Path(directory)
     (tmp / "keyring.go").write_text(code)
-    (tmp / "keyring_test.go").write_text(tests.read_text().replace('"testing"', '"testing"\n"os"\n"strings"') + extra_tests)
+    (tmp / "keyring_test.go").write_text(tests.read_text().replace('"testing"', '"testing"\n"os"\n"strings"\n"path/filepath"\n"syscall"') + extra_tests)
     (tmp / "overlay.json").write_text(json.dumps({"Replace": {
         str(source): str(tmp / "keyring.go"),
         str(tests): str(tmp / "keyring_test.go"),
