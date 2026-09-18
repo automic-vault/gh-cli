@@ -40,6 +40,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unsafe"
 )
 
@@ -209,7 +210,9 @@ func addRequestMetadata(message C.xpc_object_t, service, user, key string) error
 }
 
 func send(message C.xpc_object_t) (C.xpc_object_t, error) {
-	cwd, err := os.Getwd()
+	// os.Getwd may preserve a symlink or case alias from PWD. Vault requires
+	// the physical directory for Project Value selection.
+	cwd, err := syscall.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine Automic Vault request working directory: %w", err)
 	}
