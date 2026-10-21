@@ -308,7 +308,7 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_*****
@@ -341,7 +341,7 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_*****
@@ -366,7 +366,7 @@ func Test_statusRun(t *testing.T) {
 			},
 			wantOut: heredoc.Doc(`
 				github.com
-				  ✓ Logged in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  ✓ Logged in to github.com account monalisa (keyring)
 				  - Active account: true
 				  - Git operations protocol: https
 				  - Token: gho_*****
@@ -728,7 +728,7 @@ func Test_statusRun(t *testing.T) {
 					RefreshToken:          "ghr_abc",
 					ExpiresAt:             &future,
 					RefreshTokenExpiresAt: &rtFuture,
-				}, "https", false)
+				}, "https", true)
 				require.NoError(t, err)
 			},
 			httpStubs: func(reg *httpmock.Registry) {
@@ -736,7 +736,7 @@ func Test_statusRun(t *testing.T) {
 					httpmock.REST("GET", ""),
 					httpmock.WithHeader(httpmock.ScopesResponder("repo,read:org"), "X-Oauth-Scopes", "repo, read:org"))
 			},
-			wantOut: `{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa","tokenSource":"GH_CONFIG_DIR/hosts.yml","scopes":"repo, read:org","gitProtocol":"https","refreshable":true,"tokenExpiresAt":"2099-01-02T03:04:05Z","refreshTokenExpiresAt":"2099-06-07T08:09:10Z"}]}}` + "\n",
+			wantOut: `{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa","tokenSource":"keyring","scopes":"repo, read:org","gitProtocol":"https","refreshable":true,"tokenExpiresAt":"2099-01-02T03:04:05Z","refreshTokenExpiresAt":"2099-06-07T08:09:10Z"}]}}` + "\n",
 		},
 		{
 			name:       "json, refreshable token with unknown refresh token expiry",
@@ -751,7 +751,7 @@ func Test_statusRun(t *testing.T) {
 					httpmock.REST("GET", ""),
 					httpmock.WithHeader(httpmock.ScopesResponder("repo,read:org"), "X-Oauth-Scopes", "repo, read:org"))
 			},
-			wantOut: `{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa","tokenSource":"GH_CONFIG_DIR/hosts.yml","scopes":"repo, read:org","gitProtocol":"https","refreshable":true,"tokenExpiresAt":"2099-01-02T03:04:05Z"}]}}` + "\n",
+			wantOut: `{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"monalisa","tokenSource":"keyring","scopes":"repo, read:org","gitProtocol":"https","refreshable":true,"tokenExpiresAt":"2099-01-02T03:04:05Z"}]}}` + "\n",
 		},
 		{
 			name: "json, all valid tokens with hostname",
@@ -1013,7 +1013,7 @@ func loginRefreshable(t *testing.T, c gh.Config, hostname, username, accessToken
 		RefreshToken:          refreshToken,
 		ExpiresAt:             expiresAt,
 		RefreshTokenExpiresAt: refreshTokenExpiresAt,
-	}, "https", false)
+	}, "https", true)
 	require.NoError(t, err)
 }
 

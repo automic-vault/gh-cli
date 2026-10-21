@@ -317,7 +317,7 @@ func (c *AuthConfig) activeCredentialWithError(hostname string) (gh.Credential, 
 		if credential, err := c.TokenForUser(hostname, user); err == nil {
 			return credential, nil
 		} else if !errors.Is(err, errCredentialNotFound) {
-			return gh.Credential{}, fmt.Errorf("failed to resolve authentication token: %w", err)
+			return gh.Credential{}, fmt.Errorf("%w: failed to resolve authentication token: %w", gh.ErrCredentialProvider, err)
 		}
 	} else if err != nil {
 		if _, ok := errors.AsType[*ghConfig.KeyNotFoundError](err); !ok {
@@ -330,7 +330,7 @@ func (c *AuthConfig) activeCredentialWithError(hostname string) (gh.Credential, 
 	if token, err := c.TokenFromKeyring(hostname); err == nil {
 		return gh.Credential{Source: gh.TokenSourceKeyring, Token: token}, nil
 	} else if !errors.Is(err, keyring.ErrNotFound) {
-		return gh.Credential{}, fmt.Errorf("failed to resolve authentication token: %w", err)
+		return gh.Credential{}, fmt.Errorf("%w: failed to resolve authentication token: %w", gh.ErrCredentialProvider, err)
 	}
 
 	return gh.Credential{}, nil
@@ -696,22 +696,22 @@ func (c *AuthConfig) UsersForHost(hostname string) []string {
 // token as-is, including the current access token of a refreshable credential, and never refreshes it; use
 // TokenForUserWithRefresh when the token must be valid for API calls.
 //
-// It checks the non-refreshable keyring token first, then the managed refreshable credential, then the non-refreshable
-// config token. The ordinary keyring is probed first so the common non-refreshable user pays a single keyring lookup
-// rather than an extra miss on the refreshable slot on every request. This order is kept identical to
+// It checks the non-refreshable keyring token first, then the managed refreshable credential. The ordinary keyring is
+// probed first so the common non-refreshable user pays a single keyring lookup rather than an extra miss on the
+// refreshable slot on every request. This order is kept identical to
 // setActiveCredential so activation and resolution always agree on which credential is current, even in the mixed
 // state that should never occur because logging in with one kind removes the other.
 func (c *AuthConfig) TokenForUser(hostname, user string) (gh.Credential, error) {
 	if token, err := keyring.Get(keyringServiceName(hostname), user); err == nil {
 		return gh.Credential{Source: gh.TokenSourceKeyring, Token: token}, nil
 	} else if !errors.Is(err, keyring.ErrNotFound) {
-		return gh.Credential{}, fmt.Errorf("failed to resolve authentication token: %w", err)
+		return gh.Credential{}, fmt.Errorf("%w: failed to resolve authentication token: %w", gh.ErrCredentialProvider, err)
 	}
 
 	if credential, _, err := c.refreshableForUser(hostname, user); err == nil {
 		return credential, nil
 	} else if !errors.Is(err, errRefreshableNotFound) {
-		return gh.Credential{}, err
+		return gh.Credential{}, fmt.Errorf("%w: failed to resolve authentication token: %w", gh.ErrCredentialProvider, err)
 	}
 
 	return gh.Credential{Source: gh.TokenSourceDefault}, fmt.Errorf("%w for '%s'", errCredentialNotFound, user)

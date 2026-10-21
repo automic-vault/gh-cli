@@ -185,7 +185,7 @@ func TestTokenRun(t *testing.T) {
 			name: "no-refresh returns the stored token without refreshing",
 			opts: TokenOptions{NoRefresh: true},
 			cfgStubs: func(t *testing.T, cfg gh.Config) {
-				login(t, cfg, "github.com", "test-user", "gho_ABCDEFG", "https", false)
+				login(t, cfg, "github.com", "test-user", "gho_ABCDEFG", "https", true)
 			},
 			wantStdout:      "gho_ABCDEFG\n",
 			wantStderrOmits: "This token will expire",
@@ -399,13 +399,13 @@ func TestTokenRunSecureStorage(t *testing.T) {
 			wantErrMsg: "no oauth token found for github.com",
 		},
 		{
-			name: "state 4: refreshable token in config is suppressed",
+			name: "state 4: refreshable token in encrypted storage is returned",
 			opts: TokenOptions{NoRefresh: true},
 			cfgStubs: func(t *testing.T, cfg gh.Config) {
 				loginRefreshable(t, cfg, "github.com", "test-user", "gho_REFRESHABLE", "ghr_TOKEN", false)
 			},
-			wantErr:    true,
-			wantErrMsg: "no oauth token found for github.com",
+			wantStdout:         "gho_REFRESHABLE\n",
+			wantStderrContains: "This token will expire",
 		},
 		{
 			name: "state 4: refreshable token in keyring is returned",
@@ -507,14 +507,14 @@ func loginRefreshable(t *testing.T, c gh.Config, hostname, username, accessToken
 	loginRefreshableWithExpiry(t, c, hostname, username, accessToken, refreshToken, secureStorage, nil)
 }
 
-func loginRefreshableWithExpiry(t *testing.T, c gh.Config, hostname, username, accessToken, refreshToken string, secureStorage bool, expiresAt *time.Time) {
+func loginRefreshableWithExpiry(t *testing.T, c gh.Config, hostname, username, accessToken, refreshToken string, _ bool, expiresAt *time.Time) {
 	t.Helper()
 	authCfg := c.Authentication().(*config.AuthConfig)
 	_, err := authCfg.LoginRefreshable(hostname, username, gh.Credential{
 		Token:        accessToken,
 		RefreshToken: refreshToken,
 		ExpiresAt:    expiresAt,
-	}, "https", secureStorage)
+	}, "https", true)
 	require.NoError(t, err)
 }
 
@@ -723,14 +723,14 @@ func TestTokenRunRefresh(t *testing.T) {
 			wantRefresh: 0,
 		},
 		{
-			name:          "state 4: no-refresh suppresses a config token and does not refresh",
+			name:          "state 4: no-refresh returns the encrypted token without refreshing",
 			secureStorage: true,
 			noRefresh:     true,
 			setup: func(t *testing.T, cfg gh.Config) {
 				loginRefreshableWithExpiry(t, cfg, "github.com", "test-user", "gho_OLD", "ghr_OLD", false, &past)
 			},
 			refresher:   renewingRefresher("gho_NEW", "ghr_NEW"),
-			wantErrMsg:  "no oauth token found for github.com",
+			wantStdout:  "gho_OLD\n",
 			wantRefresh: 0,
 		},
 	}
