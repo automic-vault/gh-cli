@@ -20,6 +20,8 @@ import (
 
 type ConfigSource string
 
+var ErrCredentialProvider = errors.New("credential provider failure")
+
 const (
 	ConfigDefaultProvided ConfigSource = "default"
 	ConfigUserProvided    ConfigSource = "user"

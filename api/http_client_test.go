@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/MakeNowJust/heredoc"
+	internalgh "github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/pkg/auth"
 	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
@@ -660,7 +661,7 @@ type failingConfig struct {
 }
 
 func (c failingConfig) ActiveTokenWithRefresh(string) (auth.Credential, auth.RefreshStatus, error) {
-	return auth.Credential{}, auth.RefreshStatusInapplicable, c.err
+	return auth.Credential{}, auth.RefreshStatusInapplicable, fmt.Errorf("%w: %w", internalgh.ErrCredentialProvider, c.err)
 }
 
 func (failingConfig) HostForAPIHost(string) (string, bool) {

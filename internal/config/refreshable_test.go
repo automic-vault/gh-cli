@@ -48,8 +48,7 @@ func TestRefreshableForUser(t *testing.T) {
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "access_token", "access")
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "refresh_token", "refresh")
 			},
-			wantCredential: gh.Credential{Source: "refreshable_oauth_token", Token: "access", RefreshToken: "refresh"},
-			wantSecure:     false,
+			wantErrIs: errRefreshableNotFound,
 		},
 		{
 			name: "from config parses expiries",
@@ -61,16 +60,7 @@ func TestRefreshableForUser(t *testing.T) {
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "refresh_token_expires_in", "86400")
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "refresh_token_expires_at", refreshExpires.Format(time.RFC3339Nano))
 			},
-			wantCredential: gh.Credential{
-				Source:                "refreshable_oauth_token",
-				Token:                 "access",
-				RefreshToken:          "refresh",
-				ExpiresIn:             3600,
-				ExpiresAt:             &expires,
-				RefreshTokenExpiresIn: 86400,
-				RefreshTokenExpiresAt: &refreshExpires,
-			},
-			wantSecure: false,
+			wantErrIs: errRefreshableNotFound,
 		},
 		{
 			name: "from config invalid expiry timestamp",
@@ -79,7 +69,7 @@ func TestRefreshableForUser(t *testing.T) {
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "refresh_token", "refresh")
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "expires_at", "not-a-timestamp")
 			},
-			wantErr: true,
+			wantErrIs: errRefreshableNotFound,
 		},
 		{
 			name: "from config invalid expires_in",
@@ -88,7 +78,7 @@ func TestRefreshableForUser(t *testing.T) {
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "refresh_token", "refresh")
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "expires_in", "not-a-number")
 			},
-			wantErr: true,
+			wantErrIs: errRefreshableNotFound,
 		},
 		{
 			name: "from keyring",
@@ -150,6 +140,7 @@ func TestTokenForUserResolution(t *testing.T) {
 		setup      func(t *testing.T, authCfg *AuthConfig)
 		wantToken  string
 		wantSource string
+		wantErr    bool
 	}{
 		{
 			name: "falls back to refreshable config",
@@ -157,8 +148,7 @@ func TestTokenForUserResolution(t *testing.T) {
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "access_token", "access")
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "refresh_token", "refresh")
 			},
-			wantToken:  "access",
-			wantSource: "refreshable_oauth_token",
+			wantErr: true,
 		},
 		{
 			name: "falls back to refreshable keyring",
@@ -179,8 +169,7 @@ func TestTokenForUserResolution(t *testing.T) {
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "access_token", "access")
 				setRefreshableConfigField(t, authCfg, "github.com", "test-user", "refresh_token", "refresh")
 			},
-			wantToken:  "access",
-			wantSource: "refreshable_oauth_token",
+			wantErr: true,
 		},
 		{
 			// Also a mixed state the write paths keep unreachable; documents that the non-expiring keyring token is
@@ -202,6 +191,10 @@ func TestTokenForUserResolution(t *testing.T) {
 
 			cred, err := authCfg.TokenForUser("github.com", "test-user")
 
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
 			require.NoError(t, err)
 			require.Equal(t, tt.wantToken, cred.Token)
 			require.Equal(t, tt.wantSource, cred.Source)
@@ -306,8 +299,7 @@ func TestSetActiveCredential(t *testing.T) {
 
 func TestActivateUserResolvesRefreshableCredential(t *testing.T) {
 	authCfg := newTestAuthConfig(t)
-	setRefreshableConfigField(t, authCfg, "github.com", "test-user", "access_token", "access")
-	setRefreshableConfigField(t, authCfg, "github.com", "test-user", "refresh_token", "refresh")
+	setRefreshableKeyring(t, "github.com", "test-user", gh.Credential{Token: "access", RefreshToken: "refresh"})
 
 	require.NoError(t, authCfg.activateUser("github.com", "test-user"))
 
@@ -318,7 +310,7 @@ func TestActivateUserResolvesRefreshableCredential(t *testing.T) {
 	cred := authCfg.ActiveToken("github.com")
 	token, source := cred.Token, cred.Source
 	require.Equal(t, "access", token)
-	require.Equal(t, "refreshable_oauth_token", source)
+	require.Equal(t, "keyring", source)
 }
 
 func TestLogoutRemovesAllUserCredentialRecords(t *testing.T) {
@@ -476,38 +468,30 @@ func TestLoginReloadsFreshConfigBeforeMutating(t *testing.T) {
 	require.Equal(t, "gho_token", token)
 }
 
-func TestLoginSucceedsWhenKeyringUnavailable(t *testing.T) {
-	// The refreshable-record purge is best effort against capability loss: an unavailable keyring must not fail an
-	// otherwise valid insecure login. refreshableFromKeyring collapses an unavailable keyring to "not found", so the
-	// purge's post-condition check resolves no surviving record and login stays silent. Without that, surfacing the
-	// keyring delete error would break login wherever the keyring is absent.
+func TestLoginReportsWhenCredentialProviderIsUnavailable(t *testing.T) {
 	authCfg := newTestAuthConfig(t)
-	keyring.MockInitWithError(errors.New("keyring is unavailable"))
+	providerErr := errors.New("keyring is unavailable")
+	keyring.MockInitWithError(providerErr)
 
 	insecureStorageUsed, err := authCfg.Login("github.com", "test-user", "gho_token", "https", false)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, providerErr)
 	require.True(t, insecureStorageUsed)
-
-	token, err := authCfg.cfg.Get([]string{hostsKey, "github.com", usersKey, "test-user", oauthTokenKey})
-	require.NoError(t, err)
-	require.Equal(t, "gho_token", token)
 }
 
 func TestSwitchUserActivatesRefreshableCredential(t *testing.T) {
 	authCfg := newTestAuthConfig(t)
-	_, err := authCfg.Login("github.com", "test-user-2", "test-token-2", "ssh", false)
+	_, err := authCfg.Login("github.com", "test-user-2", "test-token-2", "ssh", true)
 	require.NoError(t, err)
 
 	authCfg.cfg.Set([]string{hostsKey, "github.com", usersKey, "test-user-1"}, "")
-	setRefreshableConfigField(t, authCfg, "github.com", "test-user-1", "access_token", "access")
-	setRefreshableConfigField(t, authCfg, "github.com", "test-user-1", "refresh_token", "refresh")
+	setRefreshableKeyring(t, "github.com", "test-user-1", gh.Credential{Token: "access", RefreshToken: "refresh"})
 
 	require.NoError(t, authCfg.SwitchUser("github.com", "test-user-1"))
 
 	cred := authCfg.ActiveToken("github.com")
 	token, source := cred.Token, cred.Source
 	require.Equal(t, "access", token)
-	require.Equal(t, "refreshable_oauth_token", source)
+	require.Equal(t, "keyring", source)
 
 	activeUser, err := authCfg.ActiveUser("github.com")
 	require.NoError(t, err)
@@ -521,10 +505,11 @@ func TestLoginRefreshable(t *testing.T) {
 		secure     bool
 		keyringErr bool
 		wantSecure bool
+		wantErr    bool
 	}{
 		{name: "secure storage", secure: true, wantSecure: true},
-		{name: "insecure storage", secure: false, wantSecure: false},
-		{name: "secure storage falls back when keyring errors", secure: true, keyringErr: true, wantSecure: false},
+		{name: "insecure storage is not active", secure: false, wantErr: true},
+		{name: "secure storage fails closed when keyring errors", secure: true, keyringErr: true, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -542,6 +527,10 @@ func TestLoginRefreshable(t *testing.T) {
 			}
 
 			insecureStorageUsed, err := authCfg.LoginRefreshable("github.com", "test-user", credential, "ssh", tt.secure)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
 			require.NoError(t, err)
 			require.Equal(t, tt.wantSecure, !insecureStorageUsed)
 
@@ -552,11 +541,7 @@ func TestLoginRefreshable(t *testing.T) {
 			// refreshableForUser tags the credential with the source it was read from, so compare against the stored
 			// credential with the expected source filled in.
 			wantCredential := credential
-			if tt.wantSecure {
-				wantCredential.Source = "keyring"
-			} else {
-				wantCredential.Source = "refreshable_oauth_token"
-			}
+			wantCredential.Source = "keyring"
 			require.Equal(t, wantCredential, gotCredential)
 
 			// The user is active and the credential resolves as the active token.
@@ -604,7 +589,7 @@ func TestLoginRefreshablePurgesNonExpiringLogin(t *testing.T) {
 	require.NoError(t, err)
 
 	credential := gh.Credential{Token: "access", RefreshToken: "refresh"}
-	_, err = authCfg.LoginRefreshable("github.com", "test-user", credential, "ssh", false)
+	_, err = authCfg.LoginRefreshable("github.com", "test-user", credential, "ssh", true)
 	require.NoError(t, err)
 
 	// The stale non-expiring token is gone and the refreshable credential resolves instead.
@@ -648,8 +633,8 @@ func TestLoginPurgesRefreshableRecord(t *testing.T) {
 	_, err := authCfg.LoginRefreshable("github.com", "test-user", credential, "ssh", true)
 	require.NoError(t, err)
 
-	// Switching back to a non-refreshable token with insecure storage must purge the refreshable record.
-	_, err = authCfg.Login("github.com", "test-user", "plain-token", "ssh", false)
+	// Switching back to a non-refreshable token in encrypted storage must purge the refreshable record.
+	_, err = authCfg.Login("github.com", "test-user", "plain-token", "ssh", true)
 	require.NoError(t, err)
 
 	// The refreshable record is gone from both storage forms.
@@ -662,9 +647,8 @@ func TestLoginPurgesRefreshableRecord(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "plain-token", cred.Token)
 
-	// And it was copied into the host-level oauth_token slot that go-gh reads for extensions, which regressed before
-	// this fix because the stale refreshable record short-circuited activation.
-	hostToken, err := authCfg.cfg.Get([]string{hostsKey, "github.com", oauthTokenKey})
+	// And it was copied into the active encrypted slot.
+	hostToken, err := keyring.Get(keyringServiceName("github.com"), "")
 	require.NoError(t, err)
 	require.Equal(t, "plain-token", hostToken)
 }
@@ -853,13 +837,13 @@ func renewingRefresher() *ghmock.TokenRefresherMock {
 	}
 }
 
-func loginRefreshableWithExpiry(t *testing.T, authCfg *AuthConfig, hostname, username, access, refresh string, expiresAt time.Time, secure bool) {
+func loginRefreshableWithExpiry(t *testing.T, authCfg *AuthConfig, hostname, username, access, refresh string, expiresAt time.Time, _ bool) {
 	t.Helper()
 	_, err := authCfg.LoginRefreshable(hostname, username, gh.Credential{
 		Token:        access,
 		RefreshToken: refresh,
 		ExpiresAt:    &expiresAt,
-	}, "https", secure)
+	}, "https", true)
 	require.NoError(t, err)
 }
 
@@ -1015,7 +999,7 @@ func TestActiveTokenWithRefresh(t *testing.T) {
 		authCfg := newTestAuthConfig(t)
 		refresher := renewingRefresher()
 		authCfg.SetTokenRefresher(refresher)
-		_, err := authCfg.Login(host, user, "plain-token", "https", false)
+		_, err := authCfg.Login(host, user, "plain-token", "https", true)
 		require.NoError(t, err)
 
 		credential, status, err := authCfg.ActiveTokenWithRefresh(host)
@@ -1063,7 +1047,7 @@ func TestTokenForUserWithRefresh(t *testing.T) {
 
 	t.Run("is inapplicable for a non-refreshable credential", func(t *testing.T) {
 		authCfg := newTestAuthConfig(t)
-		_, err := authCfg.Login(host, user, "plain-token", "https", false)
+		_, err := authCfg.Login(host, user, "plain-token", "https", true)
 		require.NoError(t, err)
 
 		credential, status, err := authCfg.TokenForUserWithRefresh(host, user)

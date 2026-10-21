@@ -295,7 +295,7 @@ func statusRun(opts *StatusOptions) error {
 		var activeUser string
 		gitProtocol := cfg.GitProtocol(hostname).Value
 		activeCred, activeRefreshStatus, err := resolveCredential(authCfg, hostname, "", opts.NoRefresh)
-		if err != nil && activeCred.Source == "" {
+		if errors.Is(err, gh.ErrCredentialProvider) {
 			return err
 		}
 		if authTokenWriteable(activeCred.Source) {
@@ -325,7 +325,7 @@ func statusRun(opts *StatusOptions) error {
 				continue
 			}
 			cred, refreshStatus, err := resolveCredential(authCfg, hostname, username, opts.NoRefresh)
-			if err != nil && cred.Source == "" {
+			if errors.Is(err, gh.ErrCredentialProvider) {
 				return err
 			}
 			entry := buildEntry(httpClient, buildEntryOptions{
