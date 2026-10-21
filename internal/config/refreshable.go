@@ -122,10 +122,10 @@ func (c *AuthConfig) reload() error {
 }
 
 // LoginRefreshable stores a refreshable credential for the user, sets the git protocol, and activates the user. It
-// mirrors Login: secure storage is preferred and the insecure configuration is used as a fallback, reported via the
-// returned bool. Any non-expiring credential for the user is removed so it cannot outrank the refreshable record. It
-// runs under the cross-process refresh lock and reloads the configuration first, so it cannot interleave with a
-// concurrent configuration read-modify-write in another gh process.
+// mirrors Login: secure storage is preferred and plaintext configuration is accepted only when explicitly requested,
+// never as a fallback. Any non-expiring credential for the user is removed so it cannot outrank the refreshable
+// record. It runs under the cross-process refresh lock and reloads the configuration first, so it cannot interleave
+// with a concurrent configuration read-modify-write in another gh process.
 func (c *AuthConfig) LoginRefreshable(hostname, username string, credential gh.Credential, gitProtocol string, secureStorage bool) (bool, error) {
 	var insecureStorageUsed bool
 	err := c.withFreshConfigForRefresh(func(lockHeld bool) error {
@@ -150,9 +150,11 @@ func (c *AuthConfig) loginRefreshable(hostname, username string, credential gh.C
 		setErr = c.setRefreshableInKeyring(hostname, username, credential)
 		if setErr == nil {
 			_ = c.cfg.Remove(refreshablePath(hostname, username))
+		} else {
+			return false, fmt.Errorf("failed to store refreshable credential in keyring: %w", setErr)
 		}
 	}
-	if !secureStorage || setErr != nil {
+	if !secureStorage {
 		c.setRefreshableInConfig(hostname, username, credential)
 		_ = keyring.Delete(refreshableServiceName(hostname), username)
 		insecureStorageUsed = true
@@ -211,34 +213,14 @@ func (c *AuthConfig) purgeNonExpiringForRefreshableLogin(hostname, username stri
 	return nil
 }
 
-// refreshableForUser returns the refreshable credential stored for the user along with whether it came from secure
-// storage. It prefers the secure keyring and falls back to the insecure configuration record, returning
-// errRefreshableNotFound when neither exists.
+// refreshableForUser returns a refreshable credential only from encrypted storage. Plaintext configuration records are
+// ignored by runtime token resolution.
 func (c *AuthConfig) refreshableForUser(hostname, username string) (gh.Credential, bool, error) {
-	// Consult the secure keyring first, matching TokenForUser. The two storage forms are mutually exclusive, so this
-	// never changes which credential is returned in practice, but keeping the precedence identical avoids confusing
-	// bugs if a misconfiguration ever left records in both places. Preferring the keyring also means the refresh
-	// tokens survive a corrupted or tampered config file.
 	credential, err := refreshableFromKeyring(hostname, username)
 	if err == nil {
 		return credential, true, nil
 	}
-	if !errors.Is(err, errRefreshableNotFound) {
-		return gh.Credential{}, true, err
-	}
-
-	// The keyring holds no record, so fall back to the insecure configuration.
-	path := refreshablePath(hostname, username)
-	if _, err := c.cfg.Get(path); err != nil {
-		// A missing config file yields an empty config, so c.cfg.Get returns a KeyNotFoundError rather than a real
-		// read failure. Treat that as "no record anywhere" and report it as not found.
-		if isKeyNotFound(err) {
-			return gh.Credential{}, false, errRefreshableNotFound
-		}
-		return gh.Credential{}, false, err
-	}
-	credential, err = c.refreshableFromConfig(path)
-	return credential, false, err
+	return gh.Credential{}, true, err
 }
 
 func (c *AuthConfig) refreshableFromConfig(path []string) (gh.Credential, error) {
@@ -505,12 +487,11 @@ func (c *AuthConfig) removeCredentialForUser(hostname, username string) error {
 // Refreshable credentials are resolved per-user via the active user key, so there is no host-level active copy to keep
 // in sync.
 func (c *AuthConfig) persistRefreshedCredential(hostname, username string, credential gh.Credential, secure bool) error {
-	if secure {
-		if err := c.setRefreshableInKeyring(hostname, username, credential); err != nil {
-			return err
-		}
-	} else {
-		c.setRefreshableInConfig(hostname, username, credential)
+	if !secure {
+		return errors.New("refusing to persist refreshed credential in plaintext configuration")
+	}
+	if err := c.setRefreshableInKeyring(hostname, username, credential); err != nil {
+		return err
 	}
 
 	return ghConfig.Write(c.cfg)

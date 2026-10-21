@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	internalgh "github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/gh/ghtelemetry"
 	"github.com/cli/cli/v2/pkg/auth"
 	"github.com/cli/cli/v2/utils"
@@ -206,7 +207,7 @@ func AddAuthTokenHeader(rt http.RoundTripper, cfg config) http.RoundTripper {
 func AddAuthTokenHeaderWithRefresh(rt http.RoundTripper, cfg refreshingConfig) http.RoundTripper {
 	return addAuthHeaderRoundTripper(rt, func(host string) (string, error) {
 		cred, _, err := cfg.ActiveTokenWithRefresh(host)
-		if err != nil {
+		if errors.Is(err, internalgh.ErrCredentialProvider) {
 			return "", err
 		}
 		token := cred.Token
@@ -218,7 +219,7 @@ func AddAuthTokenHeaderWithRefresh(rt http.RoundTripper, cfg refreshingConfig) h
 			// already authenticate keep resolving exactly as before.
 			if canonicalHost, ok := cfg.HostForAPIHost(host); ok {
 				cred, _, err = cfg.ActiveTokenWithRefresh(canonicalHost)
-				if err != nil {
+				if errors.Is(err, internalgh.ErrCredentialProvider) {
 					return "", err
 				}
 				token = cred.Token
