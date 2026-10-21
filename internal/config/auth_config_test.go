@@ -849,14 +849,7 @@ func TestTokenPrioritizesActiveUserToken(t *testing.T) {
 	require.Equal(t, "test-token2", token)
 }
 
-// TestActiveTokenPrefersPerUserConfigTokenOverUnkeyedKeyring pins an intentional behavior change introduced with the
-// refreshable-credential groundwork. ActiveToken now resolves the active user through TokenForUser, which consults the
-// per-user config oauth_token (and the refreshable slot) before the unkeyed keyring fallback. Older gh used a
-// keyring-only per-user lookup and therefore returned the unkeyed keyring token in this exact state. The scenario
-// (per-user config token present, no per-user keyring slot, an unkeyed keyring token present, and no host-level
-// oauth_token) is rare in practice because activateUser mirrors a per-user insecure token into the host-level slot.
-// See the foundation PR (cli/cli#14450) review discussion.
-func TestActiveTokenPrefersPerUserConfigTokenOverUnkeyedKeyring(t *testing.T) {
+func TestActiveTokenIgnoresPerUserConfigToken(t *testing.T) {
 	authCfg := newTestAuthConfig(t)
 
 	// Given an active user with a per-user config oauth_token but no per-user keyring slot
@@ -869,9 +862,9 @@ func TestActiveTokenPrefersPerUserConfigTokenOverUnkeyedKeyring(t *testing.T) {
 	// When we get the active token
 	cred := authCfg.ActiveToken("github.com")
 
-	// Then it returns the per-user config token, not the unkeyed keyring token older gh would have returned
-	require.Equal(t, "per-user-config", cred.Token)
-	require.Equal(t, gh.TokenSourceOAuthToken, cred.Source)
+	// Then it ignores plaintext configuration and returns the legacy encrypted token.
+	require.Equal(t, "legacy-keyring", cred.Token)
+	require.Equal(t, gh.TokenSourceKeyring, cred.Source)
 }
 
 func TestTokenWithActiveUserNotInKeyringFallsBackToBlank(t *testing.T) {
