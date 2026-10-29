@@ -369,7 +369,7 @@ func Test_statusRun(t *testing.T) {
 			wantErr: cmdutil.SilentError,
 			wantErrOut: heredoc.Doc(`
 				github.com
-				  X Token for github.com account monalisa (GH_CONFIG_DIR/hosts.yml) has expired
+				  X Token for github.com account monalisa (keyring) has expired
 				  - Active account: true
 				  - Expiring token that gh refreshes automatically
 				  - Token expires: 2000-01-01T00:00:00Z (expired about 2 days ago)
@@ -393,7 +393,7 @@ func Test_statusRun(t *testing.T) {
 			wantErr: cmdutil.SilentError,
 			wantErrOut: heredoc.Doc(`
 				github.com
-				  X Token for github.com account monalisa (GH_CONFIG_DIR/hosts.yml) has expired
+				  X Token for github.com account monalisa (keyring) has expired
 				  - Active account: true
 				  - Expiring token that gh refreshes automatically
 				  - Token expires: 2000-01-01T00:00:00Z (expired about 2 days ago)
@@ -417,9 +417,9 @@ func Test_statusRun(t *testing.T) {
 			wantErr: cmdutil.SilentError,
 			wantErrOut: heredoc.Doc(`
 				github.com
-				  X Failed to log in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  X Failed to log in to github.com account monalisa (keyring)
 				  - Active account: true
-				  - The token in GH_CONFIG_DIR/hosts.yml is invalid.
+				  - The token in keyring is invalid.
 				  - To re-authenticate, run: gh auth refresh -h github.com
 				  - To forget about this account, run: gh auth logout -h github.com -u monalisa
 				  - Error: HTTP 503 (https://api.github.com/)
@@ -439,9 +439,9 @@ func Test_statusRun(t *testing.T) {
 			wantErr: cmdutil.SilentError,
 			wantErrOut: heredoc.Doc(`
 				github.com
-				  X Failed to log in to github.com account monalisa (GH_CONFIG_DIR/hosts.yml)
+				  X Failed to log in to github.com account monalisa (keyring)
 				  - Active account: true
-				  - The token in GH_CONFIG_DIR/hosts.yml is invalid.
+				  - The token in keyring is invalid.
 				  - To re-authenticate, run: gh auth refresh -h github.com
 				  - To forget about this account, run: gh auth logout -h github.com -u monalisa
 				  - Error: HTTP 401 (https://api.github.com/)
