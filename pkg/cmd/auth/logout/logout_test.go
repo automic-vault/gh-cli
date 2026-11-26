@@ -202,7 +202,7 @@ func Test_logoutRun_tty(t *testing.T) {
 				}
 			},
 			assertToken: hasNoToken("github.com"),
-			wantHosts:   "ghe.io:\n    users:\n        monalisa-ghe:\n            oauth_token: abc123\n    git_protocol: ssh\n    oauth_token: abc123\n    user: monalisa-ghe\n",
+			wantHosts:   "ghe.io:\n    git_protocol: ssh\n    users:\n        monalisa-ghe:\n    user: monalisa-ghe\n",
 			wantErrOut:  regexp.MustCompile(`Logged out of github.com account monalisa`),
 		},
 		{
@@ -273,7 +273,7 @@ func Test_logoutRun_tty(t *testing.T) {
 					{"monalisa", "abc123"},
 				}},
 			},
-			wantHosts:   "github.com:\n    users:\n        monalisa:\n            oauth_token: abc123\n    git_protocol: ssh\n    oauth_token: abc123\n    user: monalisa\n",
+			wantHosts:   "github.com:\n    git_protocol: ssh\n    users:\n        monalisa:\n    user: monalisa\n",
 			assertToken: hasNoToken("ghe.io"),
 			wantErrOut:  regexp.MustCompile(`Logged out of ghe.io account monalisa-ghe`),
 			gitHostname: "ghe.io",
@@ -371,7 +371,7 @@ func Test_logoutRun_tty(t *testing.T) {
 			httpStatus:    204,
 			wantHTTPHost:  "api.github.com",
 			wantHTTPToken: "gho_selected",
-			wantHosts:     "github.com:\n    users:\n        hubot:\n            oauth_token: ghp_other\n    git_protocol: ssh\n    user: hubot\n    oauth_token: ghp_other\n",
+			wantHosts:     "github.com:\n    git_protocol: ssh\n    users:\n        hubot:\n    user: hubot\n",
 			assertToken:   hasActiveToken("github.com", "ghp_other"),
 			wantStderr:    "✓ Revoked GitHub CLI OAuth token for monalisa (github.com)\n✓ Logged out of github.com account monalisa\n",
 		},
@@ -419,7 +419,7 @@ func Test_logoutRun_tty(t *testing.T) {
 					_, err := cfg.Authentication().Login(
 						string(hostUsers.host),
 						user.name,
-						user.token, "ssh", tt.secureStorage,
+						user.token, "ssh", true,
 					)
 					require.NoError(t, err)
 				}
@@ -586,7 +586,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 					{"monalisa-ghe", "abc123"},
 				}},
 			},
-			wantHosts:   "ghe.io:\n    users:\n        monalisa-ghe:\n            oauth_token: abc123\n    git_protocol: ssh\n    oauth_token: abc123\n    user: monalisa-ghe\n",
+			wantHosts:   "ghe.io:\n    git_protocol: ssh\n    users:\n        monalisa-ghe:\n    user: monalisa-ghe\n",
 			assertToken: hasNoToken("github.com"),
 			wantErrOut:  regexp.MustCompile(`Logged out of github.com account monalisa`),
 		},
@@ -730,7 +730,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 			httpStatus:    204,
 			wantHTTPHost:  "api.github.com",
 			wantHTTPToken: "gho_saved",
-			wantHosts:     "github.com:\n    users:\n        hubot:\n            oauth_token: ghp_other\n    git_protocol: ssh\n    user: hubot\n    oauth_token: ghp_other\n",
+			wantHosts:     "github.com:\n    git_protocol: ssh\n    users:\n        hubot:\n    user: hubot\n",
 			assertToken:   hasActiveToken("github.com", "ghp_other"),
 			wantStderr:    "✓ Revoked GitHub CLI OAuth token for monalisa (github.com)\n✓ Logged out of github.com account monalisa\n✓ Switched active account for github.com to hubot\n",
 		},
@@ -798,7 +798,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 			name:          "OAuth revocation proceeds without the advisory lock",
 			opts:          &LogoutOptions{},
 			cfgHosts:      []hostUsers{{"github.com", []user{{"monalisa", "gho_saved"}}}},
-			setupConfig:   expiredRefreshableCredential(false),
+			setupConfig:   expiredRefreshableCredential(true),
 			lockErr:       errors.New("locking unavailable"),
 			httpStatus:    204,
 			wantHTTPHost:  "api.github.com",
@@ -842,7 +842,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 			cfgHosts: []hostUsers{{"github.com", []user{{"monalisa", "gho_saved"}}}},
 			setupConfig: func(t *testing.T, cfg gh.Config) {
 				_, err := cfg.Authentication().LoginRefreshable("github.com", "monalisa",
-					gh.Credential{Token: "gho_saved", RefreshToken: "ghr_saved"}, "ssh", false)
+					gh.Credential{Token: "gho_saved", RefreshToken: "ghr_saved"}, "ssh", true)
 				require.NoError(t, err)
 			},
 			httpStatus:    500,
@@ -891,7 +891,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 			opts:     &LogoutOptions{Username: "monalisa"},
 			cfgHosts: []hostUsers{{"github.com", []user{{"monalisa", "gho_saved"}, {"hubot", "ghp_other"}}}},
 			setupConfig: func(t *testing.T, cfg gh.Config) {
-				expiredRefreshableCredential(false)(t, cfg)
+				expiredRefreshableCredential(true)(t, cfg)
 				require.NoError(t, cfg.Authentication().SwitchUser("github.com", "hubot"))
 			},
 			httpStatus:    404,
@@ -900,7 +900,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 			retryStatus:   204,
 			wantHTTPHost:  "api.github.com",
 			wantHTTPToken: "gho_saved",
-			wantHosts:     "github.com:\n    users:\n        hubot:\n            oauth_token: ghp_other\n    git_protocol: ssh\n    user: hubot\n    oauth_token: ghp_other\n",
+			wantHosts:     "github.com:\n    git_protocol: ssh\n    users:\n        hubot:\n    user: hubot\n",
 			assertToken:   hasActiveToken("github.com", "ghp_other"),
 			wantStderr:    "✓ Revoked GitHub CLI OAuth token for monalisa (github.com)\n✓ Logged out of github.com account monalisa\n",
 		},
@@ -925,7 +925,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 			name:          "failed deletion after refresh retains the replacement pair for retry",
 			opts:          &LogoutOptions{},
 			cfgHosts:      []hostUsers{{"github.com", []user{{"monalisa", "gho_saved"}}}},
-			setupConfig:   expiredRefreshableCredential(false),
+			setupConfig:   expiredRefreshableCredential(true),
 			lockErr:       errors.New("locking unavailable"),
 			httpStatus:    404,
 			refreshStatus: 200,
@@ -933,7 +933,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 			retryStatus:   500,
 			wantHTTPHost:  "api.github.com",
 			wantHTTPToken: "gho_saved",
-			assertToken:   hasSavedPair("github.com", "gho_rotated", "ghr_rotated", gh.TokenSourceRefreshableOAuthToken),
+			assertToken:   hasSavedPair("github.com", "gho_rotated", "ghr_rotated", gh.TokenSourceKeyring),
 			wantErr:       "failed to revoke GitHub CLI OAuth token: HTTP 500 (Internal Server Error)" + logoutRetryHint,
 		},
 		{
@@ -954,40 +954,40 @@ func Test_logoutRun_nontty(t *testing.T) {
 			name:          "a refresh timeout retains the original pair",
 			opts:          &LogoutOptions{},
 			cfgHosts:      []hostUsers{{"github.com", []user{{"monalisa", "gho_saved"}}}},
-			setupConfig:   expiredRefreshableCredential(false),
+			setupConfig:   expiredRefreshableCredential(true),
 			httpStatus:    404,
 			refreshErr:    context.DeadlineExceeded,
 			wantHTTPHost:  "api.github.com",
 			wantHTTPToken: "gho_saved",
 			retain:        true,
-			assertToken:   hasSavedPair("github.com", "gho_saved", "ghr_saved", gh.TokenSourceRefreshableOAuthToken),
+			assertToken:   hasSavedPair("github.com", "gho_saved", "ghr_saved", gh.TokenSourceKeyring),
 			wantErr:       "could not refresh token for revocation: request timed out" + logoutRetryHint,
 		},
 		{
 			name:          "a canceled refresh retains the original pair",
 			opts:          &LogoutOptions{},
 			cfgHosts:      []hostUsers{{"github.com", []user{{"monalisa", "gho_saved"}}}},
-			setupConfig:   expiredRefreshableCredential(false),
+			setupConfig:   expiredRefreshableCredential(true),
 			httpStatus:    404,
 			refreshErr:    context.Canceled,
 			wantHTTPHost:  "api.github.com",
 			wantHTTPToken: "gho_saved",
 			retain:        true,
-			assertToken:   hasSavedPair("github.com", "gho_saved", "ghr_saved", gh.TokenSourceRefreshableOAuthToken),
+			assertToken:   hasSavedPair("github.com", "gho_saved", "ghr_saved", gh.TokenSourceKeyring),
 			wantErr:       "could not refresh token for revocation: context canceled" + logoutRetryHint,
 		},
 		{
 			name:          "a rejected refresh retains the original pair without exposing credentials",
 			opts:          &LogoutOptions{},
 			cfgHosts:      []hostUsers{{"github.com", []user{{"monalisa", "gho_saved"}}}},
-			setupConfig:   expiredRefreshableCredential(false),
+			setupConfig:   expiredRefreshableCredential(true),
 			httpStatus:    404,
 			refreshStatus: 200,
 			refreshBody:   `{"error":"bad_refresh_token","error_description":"rejected ghr_saved and gho_saved"}`,
 			wantHTTPHost:  "api.github.com",
 			wantHTTPToken: "gho_saved",
 			retain:        true,
-			assertToken:   hasSavedPair("github.com", "gho_saved", "ghr_saved", gh.TokenSourceRefreshableOAuthToken),
+			assertToken:   hasSavedPair("github.com", "gho_saved", "ghr_saved", gh.TokenSourceKeyring),
 			wantErr:       "could not refresh token for revocation: refresh token is invalid or expired" + logoutRetryHint,
 		},
 		{
@@ -995,7 +995,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 			saveFails:     true,
 			opts:          &LogoutOptions{},
 			cfgHosts:      []hostUsers{{"github.com", []user{{"monalisa", "gho_saved"}}}},
-			setupConfig:   expiredRefreshableCredential(false),
+			setupConfig:   expiredRefreshableCredential(true),
 			httpStatus:    404,
 			refreshStatus: 200,
 			refreshBody:   `{"access_token":"gho_rotated","refresh_token":"ghr_rotated","expires_in":28800,"token_type":"bearer"}`,
@@ -1009,7 +1009,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 			name:          "an unsaved replacement cleanup failure reports both errors",
 			opts:          &LogoutOptions{},
 			cfgHosts:      []hostUsers{{"github.com", []user{{"monalisa", "gho_saved"}}}},
-			setupConfig:   expiredRefreshableCredential(false),
+			setupConfig:   expiredRefreshableCredential(true),
 			saveFails:     true,
 			httpStatus:    404,
 			refreshStatus: 200,
@@ -1023,14 +1023,14 @@ func Test_logoutRun_nontty(t *testing.T) {
 			name:          "refresh does not follow redirects",
 			opts:          &LogoutOptions{},
 			cfgHosts:      []hostUsers{{"github.com", []user{{"monalisa", "gho_saved"}}}},
-			setupConfig:   expiredRefreshableCredential(false),
+			setupConfig:   expiredRefreshableCredential(true),
 			httpStatus:    404,
 			refreshStatus: 302,
 			refreshBody:   `{}`,
 			wantHTTPHost:  "api.github.com",
 			wantHTTPToken: "gho_saved",
 			retain:        true,
-			assertToken:   hasSavedPair("github.com", "gho_saved", "ghr_saved", gh.TokenSourceRefreshableOAuthToken),
+			assertToken:   hasSavedPair("github.com", "gho_saved", "ghr_saved", gh.TokenSourceKeyring),
 			wantErr:       "could not refresh token for revocation" + logoutRetryHint,
 		},
 		{
@@ -1038,7 +1038,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 			opts:     &LogoutOptions{},
 			cfgHosts: []hostUsers{{"github.com", []user{{"monalisa", "gho_saved"}}}},
 			setupConfig: func(t *testing.T, cfg gh.Config) {
-				expiredRefreshableCredential(false)(t, cfg)
+				expiredRefreshableCredential(true)(t, cfg)
 				cfg.Set("github.com", "api_host", "gateway.example.com")
 			},
 			httpStatus:    404,
@@ -1106,7 +1106,7 @@ func Test_logoutRun_nontty(t *testing.T) {
 					_, err := cfg.Authentication().Login(
 						string(hostUsers.host),
 						user.name,
-						user.token, "ssh", tt.secureStorage,
+						user.token, "ssh", true,
 					)
 					require.NoError(t, err)
 				}

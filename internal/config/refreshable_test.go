@@ -398,14 +398,10 @@ func TestLogoutWithCredential(t *testing.T) {
 		replace      bool
 		invalidPair  bool
 	}{
-		{name: "fresh plaintext credential", wantCallback: true},
-		{name: "fresh keyring credential", secure: true, wantCallback: true},
-		{name: "fresh plaintext refreshable credential", refreshable: true, wantCallback: true},
-		{name: "fresh keyring refreshable credential", secure: true, refreshable: true, wantCallback: true},
-		{name: "failed revocation retains plaintext pair", refreshable: true, callbackErr: callbackErr, wantErr: "revocation failed", wantCallback: true},
-		{name: "failed revocation retains keyring pair", secure: true, refreshable: true, callbackErr: callbackErr, wantErr: "revocation failed", wantCallback: true},
-		{name: "failed revocation retains replacement plaintext pair", refreshable: true, replace: true, callbackErr: callbackErr, wantErr: "revocation failed", wantCallback: true},
-		{name: "failed revocation retains replacement keyring pair", secure: true, refreshable: true, replace: true, callbackErr: callbackErr, wantErr: "revocation failed", wantCallback: true},
+		{name: "fresh Vault credential", wantCallback: true},
+		{name: "fresh Vault refreshable credential", refreshable: true, wantCallback: true},
+		{name: "failed revocation retains Vault pair", refreshable: true, callbackErr: callbackErr, wantErr: "revocation failed", wantCallback: true},
+		{name: "failed revocation retains replacement Vault pair", refreshable: true, replace: true, callbackErr: callbackErr, wantErr: "revocation failed", wantCallback: true},
 		{name: "replacement proceeds without the advisory lock", refreshable: true, replace: true, lockErr: lockErr, wantCallback: true},
 		{name: "failed revocation retains renewed keyring pair without advisory locking", secure: true, refreshable: true, replace: true, lockErr: lockErr, callbackErr: callbackErr, wantErr: "revocation failed", wantCallback: true},
 		{name: "read-only state directory does not prevent saving the replacement", refreshable: true, replace: true, lockErr: &fs.PathError{Op: "mkdir", Path: "state", Err: syscall.EROFS}, callbackErr: callbackErr, wantErr: "revocation failed", wantCallback: true},
@@ -419,8 +415,9 @@ func TestLogoutWithCredential(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tt.secure = true
 			authCfg := newTestAuthConfig(t)
-			_, err := authCfg.Login("github.com", "other-user", "other-token", "https", false)
+			_, err := authCfg.Login("github.com", "other-user", "other-token", "https", true)
 			require.NoError(t, err)
 			if tt.refreshable {
 				_, err = authCfg.LoginRefreshable("github.com", "test-user",
@@ -446,7 +443,7 @@ func TestLogoutWithCredential(t *testing.T) {
 					return authCfg.cfg.Remove([]string{hostsKey, "github.com", usersKey, "test-user"})
 				}
 				if tt.removeToken {
-					return authCfg.cfg.Remove([]string{hostsKey, "github.com", usersKey, "test-user", oauthTokenKey})
+					return keyring.Delete(keyringServiceName("github.com"), "test-user")
 				}
 				if !locked {
 					return nil
@@ -1167,10 +1164,11 @@ func TestActiveTokenWithRefresh(t *testing.T) {
 				},
 			},
 			{
-				name:    "plaintext storage without the lock",
+				name:    "keyring storage without the lock",
 				lockErr: errors.New("advisory locking unavailable"),
+				secure:  true,
 				storePeer: func(t *testing.T, authCfg *AuthConfig, credential gh.Credential) {
-					authCfg.setRefreshableInConfig(host, user, credential)
+					setRefreshableKeyring(t, host, user, credential)
 				},
 			},
 		}

@@ -79,7 +79,7 @@ func TestRefreshTelemetry(t *testing.T) {
 			refresher:   func(*testing.T) gh.TokenRefresher { return renewingRefresher() },
 			wantOutcome: "done",
 			wantLock:    "held",
-			wantStorage: "plaintext",
+			wantStorage: "keyring",
 		},
 		{
 			name:        "refreshed without the lock after a timeout",
@@ -107,18 +107,20 @@ func TestRefreshTelemetry(t *testing.T) {
 			refresher:   func(*testing.T) gh.TokenRefresher { return rejectingRefresher(nil) },
 			wantOutcome: "rejected_removed",
 			wantLock:    "held",
-			wantStorage: "plaintext",
+			wantStorage: "keyring",
 		},
 		{
 			name: "rejected but removal failed",
 			refresher: func(t *testing.T) gh.TokenRefresher {
 				return rejectingRefresher(func() {
-					require.NoError(t, os.Chmod(filepath.Join(os.Getenv("GH_CONFIG_DIR"), "hosts.yml"), 0400))
+					path := filepath.Join(os.Getenv("GH_CONFIG_DIR"), "config.yml")
+					require.NoError(t, os.Remove(path))
+					require.NoError(t, os.Mkdir(path, 0o700))
 				})
 			},
 			wantOutcome: "rejected_remove_failed",
 			wantLock:    "held",
-			wantStorage: "plaintext",
+			wantStorage: "keyring",
 		},
 		{
 			name:        "rejected and kept without the lock",
@@ -126,7 +128,7 @@ func TestRefreshTelemetry(t *testing.T) {
 			refresher:   func(*testing.T) gh.TokenRefresher { return rejectingRefresher(nil) },
 			wantOutcome: "rejected_kept",
 			wantLock:    "unavailable",
-			wantStorage: "plaintext",
+			wantStorage: "keyring",
 		},
 		{
 			name: "exchange failed",
@@ -139,7 +141,7 @@ func TestRefreshTelemetry(t *testing.T) {
 			},
 			wantOutcome: "exchange_failed",
 			wantLock:    "held",
-			wantStorage: "plaintext",
+			wantStorage: "keyring",
 		},
 		{
 			name:        "skipped because the lock file is inaccessible",
@@ -147,7 +149,7 @@ func TestRefreshTelemetry(t *testing.T) {
 			refresher:   func(*testing.T) gh.TokenRefresher { return renewingRefresher() },
 			wantOutcome: "skipped",
 			wantLock:    "inaccessible",
-			wantStorage: "plaintext",
+			wantStorage: "keyring",
 		},
 	}
 	for _, tt := range tests {
